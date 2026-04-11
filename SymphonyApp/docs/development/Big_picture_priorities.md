@@ -1,6 +1,4 @@
-Good question. Let me lay out the current architecture, the root causes of both issues, and potential solutions ranked by impact and feasibility.
 
----
 
 ## Current Architecture & Pain Points
 
