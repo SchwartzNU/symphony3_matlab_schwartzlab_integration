@@ -1,0 +1,95 @@
+classdef FigureHandlerManager < handle
+    % A FigureHandlerManager manages figure handlers for a protocol.
+    
+    properties (Access = private)
+        log
+    end
+    
+    properties (Access = private, Transient)
+        figureHandlers
+    end
+    
+    methods
+        
+        function obj = FigureHandlerManager()
+            obj.log = log4m.LogManager.getLogger(class(obj));
+        end
+        
+        function delete(obj)
+            obj.closeFigures();
+        end
+        
+        function h = showFigure(obj, className, varargin)
+            for i = 1:numel(obj.figureHandlers)
+                handler = obj.figureHandlers{i};
+                if strcmp(class(handler), className)
+                    % Reset the handler with new args if it supports reset
+                    if ismethod(handler, 'reset') && ~isempty(varargin)
+                        try
+                            handler.reset(varargin{:});
+                        catch
+                        end
+                    end
+                    handler.show();
+                    h = handler;
+                    return;
+                end
+            end
+            
+            constructor = str2func(className);
+            handler = constructor(varargin{:});
+            handler.show();
+            obj.figureHandlers{end + 1} = handler;
+            addlistener(handler, 'Closed', @obj.onFigureHandlerClosed);
+            h = handler;
+        end
+        
+        function updateFigures(obj, epochOrInterval)
+            for i = 1:numel(obj.figureHandlers)
+                obj.figureHandlers{i}.handleEpochOrInterval(epochOrInterval);
+            end
+        end
+
+        function updateStreamingFigures(obj, epoch)
+            % Update only figure handlers that can display partial/streaming
+            % data (requiresFullEpoch = false). Handlers that need the full
+            % epoch (MeanResponse, ResponseStatistics, Progress, etc.) are
+            % skipped here and updated normally on CompletedEpoch.
+            for i = 1:numel(obj.figureHandlers)
+                handler = obj.figureHandlers{i};
+                try
+                    if ~handler.requiresFullEpoch
+                        handler.handleEpoch(epoch);
+                    end
+                catch
+                    % Silently skip handlers that can't handle partial data
+                end
+            end
+        end
+        
+        function clearFigures(obj)
+            for i = 1:numel(obj.figureHandlers)
+                obj.figureHandlers{i}.clear();
+            end
+        end
+        
+        function closeFigures(obj)
+            while ~isempty(obj.figureHandlers)
+                obj.figureHandlers{1}.close();
+            end
+        end
+        
+    end
+    
+    methods (Access = private)
+        
+        function onFigureHandlerClosed(obj, handler, ~)
+            index = cellfun(@(h)h == handler, obj.figureHandlers);
+            delete(handler);
+            obj.figureHandlers(index) = [];
+        end
+        
+    end
+    
+end
+
