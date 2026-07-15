@@ -43,8 +43,8 @@ classdef InitializeRigDialog < handle
         end
 
         function buildUi(obj)
-            w = 340;
-            h = 120;
+            w = 520;
+            h = 130;
             pos = obj.centerOnParent(w, h);
 
             obj.fig = uifigure( ...
@@ -52,7 +52,7 @@ classdef InitializeRigDialog < handle
                 'Position', pos, ...
                 'WindowStyle', 'modal', ...
                 'Color', [0.94 0.94 0.94], ...
-                'Resize', 'off', ...
+                'Resize', 'on', ...
                 'CloseRequestFcn', @(~,~)obj.onCancel(), ...
                 'KeyPressFcn', @(~,e)obj.onKeyPress(e), ...
                 'WindowKeyPressFcn', @(~,e)obj.onKeyPress(e));
@@ -106,6 +106,14 @@ classdef InitializeRigDialog < handle
                 end
                 obj.rigDropdown.Items = labels;
                 obj.rigIds = ids;
+
+                % Widen the dialog to fit the longest description, since long
+                % rig names (e.g. 'SchwartzLab_Rig_A_DynamicClamp') otherwise
+                % truncate in the dropdown. Clamp to a sane range and recenter.
+                maxLen = max(cellfun(@numel, labels));
+                wNew = min(max(360, 140 + maxLen * 7), 900);
+                p = obj.fig.Position;
+                obj.fig.Position = [p(1) + (p(3) - wNew)/2, p(2), wNew, p(4)];
             catch ex
                 obj.rigDropdown.Items = {'(error loading rigs)'};
                 obj.rigIds = {};

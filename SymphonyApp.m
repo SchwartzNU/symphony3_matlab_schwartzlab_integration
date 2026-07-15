@@ -303,6 +303,36 @@ classdef SymphonyApp < matlab.apps.AppBase
             end
         end
 
+        function onWindowResize(app)
+            % Reflow the manually-positioned main-window controls so the
+            % protocol panel (and the parameter list inside it) grows with
+            % the window. Buttons stay bottom-anchored at their fixed
+            % positions; the dropdown row stays top-anchored, full width.
+            if isempty(app.UIFigure) || ~isvalid(app.UIFigure)
+                return;
+            end
+            p = app.UIFigure.Position;
+            W = p(3);
+            H = p(4);
+            m = 10;              % outer margin
+            topH = 22;           % dropdown/label row height
+            panelBottom = 106;   % keep clear of the button row (y 52..97)
+            if ~isempty(app.ProtocolDropDownLabel) && isvalid(app.ProtocolDropDownLabel)
+                app.ProtocolDropDownLabel.Position = [5, H - topH - 2, 45, topH];
+            end
+            if ~isempty(app.protocolPopupMenu) && isvalid(app.protocolPopupMenu)
+                app.protocolPopupMenu.Position = [68, H - topH - 2, max(80, W - 68 - m), topH];
+            end
+            if ~isempty(app.statusLabel) && isvalid(app.statusLabel)
+                app.statusLabel.Position = [m, 20, max(80, W - 2*m), topH];
+            end
+            if ~isempty(app.protocolPanel) && isvalid(app.protocolPanel)
+                panelTop = H - topH - 6;
+                app.protocolPanel.Position = [m, panelBottom, ...
+                    max(120, W - 2*m), max(60, panelTop - panelBottom)];
+            end
+        end
+
         function ensureLegacyContext(app)
             if isempty(app.legacyContext)
                 appDir = fileparts(mfilename('fullpath'));
@@ -822,6 +852,7 @@ classdef SymphonyApp < matlab.apps.AppBase
                     configAdapter = symphonyui.ui.ModuleConfigurationAdapter(app.currentRig);
                     mod.setConfigurationService(configAdapter);
                 end
+                mod.setAcquisitionService(symphonyui.ui.ModuleAcquisitionAdapter(app));
 
                 mod.go();
                 app.openModules{end+1} = mod;
@@ -878,6 +909,7 @@ classdef SymphonyApp < matlab.apps.AppBase
                         configAdapter = symphonyui.ui.ModuleConfigurationAdapter(app.currentRig);
                         mod.setConfigurationService(configAdapter);
                     end
+                    mod.setAcquisitionService(symphonyui.ui.ModuleAcquisitionAdapter(app));
 
                     mod.preload();  % willGo + bind, stays hidden
                     app.openModules{end+1} = mod;
@@ -929,6 +961,24 @@ classdef SymphonyApp < matlab.apps.AppBase
                 % Filter out hidden properties
                 visible = ~[allProps.isHidden];
                 allProps = allProps(visible);
+
+                % Group by category so the extension's parameter sections
+                % render together. Stable within a category; categories sorted
+                % so numeric-prefixed names ('1 Basic','2 Timing',...) order right.
+                if ~isempty(allProps) && isfield(allProps, 'category')
+                    cats = strings(1, numel(allProps));
+                    for ci = 1:numel(allProps)
+                        cc = allProps(ci).category;
+                        if isempty(cc), cc = 'zzzz Other'; end
+                        cats(ci) = string(cc);
+                    end
+                    uc = sort(unique(cats));
+                    ord = [];
+                    for ci = 1:numel(uc)
+                        ord = [ord, find(cats == uc(ci))]; %#ok<AGROW>
+                    end
+                    allProps = allProps(ord);
+                end
                 n = numel(allProps);
 
                 % Check if the property structure matches existing controls
@@ -990,25 +1040,69 @@ classdef SymphonyApp < matlab.apps.AppBase
                 meta = cell(n, 1);
                 controls = cell(n, 1);
 
-                % Configure grid rows
-                rowHeights = repmat({22}, 1, n);
+                % Precompute row layout: insert a header row before each new
+                % (non-empty) category so parameters render in labeled sections.
+                rowHeights = {};
+                rowIsHeader = false(1, 0);
+                rowPropIdx = zeros(1, 0);
+                rowCat = strings(1, 0);
+                lastCat = string(char(1));  % sentinel that won't match a real category
+                for i = 1:n
+                    c = '';
+                    if isfield(allProps, 'category'), c = allProps(i).category; end
+                    c = string(c);
+                    if strlength(c) > 0 && c ~= "zzzz Other"
+                        if c ~= lastCat
+                            rowHeights{end+1} = 20; %#ok<AGROW>
+                            rowIsHeader(end+1) = true; %#ok<AGROW>
+                            rowPropIdx(end+1) = 0; %#ok<AGROW>
+                            rowCat(end+1) = c; %#ok<AGROW>
+                            lastCat = c;
+                        end
+                    else
+                        lastCat = string(char(1)); % reset so a later categorized prop starts a header
+                    end
+                    rowHeights{end+1} = 22; %#ok<AGROW>
+                    rowIsHeader(end+1) = false; %#ok<AGROW>
+                    rowPropIdx(end+1) = i; %#ok<AGROW>
+                    rowCat(end+1) = ""; %#ok<AGROW>
+                end
                 app.protocolPropertyGrid.RowHeight = rowHeights;
 
-                for i = 1:n
+                for r = 1:numel(rowHeights)
+                    if rowIsHeader(r)
+                        % Section header spanning both columns (strip sort prefix)
+                        headerText = regexprep(char(rowCat(r)), '^\d+\s+', '');
+                        h = uilabel(app.protocolPropertyGrid, ...
+                            'Text', headerText, ...
+                            'FontSize', 11, ...
+                            'FontWeight', 'bold', ...
+                            'HorizontalAlignment', 'left');
+                        h.Layout.Row = r;
+                        h.Layout.Column = [1 2];
+                        continue;
+                    end
+
+                    i = rowPropIdx(r);
                     p = allProps(i);
-                    meta{i} = struct( ...
-                        'Name', p.name, ...
-                        'PrimitiveType', p.primitiveType, ...
-                        'IsReadOnly', p.isReadOnly, ...
-                        'Value', p.value, ...
-                        'Domain', {p.domain});
+                    % Build field-by-field (NOT struct(...)): a cell-valued
+                    % p.value would make struct() return a non-scalar struct
+                    % array, which later makes meta{i}.Name expand to a
+                    % comma-separated list -> strcmp 'Too many input arguments'.
+                    mi = struct();
+                    mi.Name = p.name;
+                    mi.PrimitiveType = p.primitiveType;
+                    mi.IsReadOnly = p.isReadOnly;
+                    mi.Value = p.value;
+                    mi.Domain = p.domain;
+                    meta{i} = mi;
 
                     % Label
                     lbl = uilabel(app.protocolPropertyGrid, ...
                         'Text', p.displayName, ...
                         'FontSize', 11, ...
                         'HorizontalAlignment', 'right');
-                    lbl.Layout.Row = i;
+                    lbl.Layout.Row = r;
                     lbl.Layout.Column = 1;
 
                     % Value control: dropdown for domain properties, editfield otherwise
@@ -1039,7 +1133,7 @@ classdef SymphonyApp < matlab.apps.AppBase
                             'Editable', SymphonyAppUtil.onOff(~p.isReadOnly), ...
                             'ValueChangedFcn', @(s, e) app.onPropertyControlChanged(i, s.Value));
                     end
-                    ctrl.Layout.Row = i;
+                    ctrl.Layout.Row = r;
                     ctrl.Layout.Column = 2;
 
                     controls{i} = ctrl;
@@ -1082,7 +1176,23 @@ classdef SymphonyApp < matlab.apps.AppBase
                 elseif islogical(m.Value)
                     propValue = strcmp(newValue, 'true');
                 else
-                    propValue = SymphonyAppUtil.coerceValue(newValue, m.PrimitiveType);
+                    % An empty numeric entry means "no change" -- revert quietly
+                    % instead of raising "Value must be numeric".
+                    if (ischar(newValue) || isstring(newValue)) && isempty(strtrim(char(newValue)))
+                        app.refreshProtocolPropertyGrid();
+                        return;
+                    end
+                    try
+                        propValue = SymphonyAppUtil.coerceValue(newValue, m.PrimitiveType);
+                    catch
+                        % Invalid numeric entry: revert and warn gently, without
+                        % the verbose Set Property Error stack dump.
+                        app.refreshProtocolPropertyGrid();
+                        uialert(app.UIFigure, ...
+                            sprintf('"%s" is not a valid value for %s.', char(string(newValue)), m.Name), ...
+                            'Invalid value', 'Icon', 'warning');
+                        return;
+                    end
                 end
                 propName = m.Name;
 
@@ -1732,7 +1842,9 @@ classdef SymphonyApp < matlab.apps.AppBase
             iconPath = fullfile(pathToRoot, 'code', 'src', 'resources', 'icons');
 
             app.UIFigure = uifigure('Visible', 'off');
-            app.UIFigure.Position = [100 100 360 550]; %[100 100 390 560]; appbox.screenCenter(360,500);
+            app.UIFigure.Position = [100 100 360 550];
+            app.UIFigure.Resize = 'on';
+            app.UIFigure.AutoResizeChildren = 'off'; %[100 100 390 560]; appbox.screenCenter(360,500);
             app.UIFigure.Name = 'SymphonyApp';
 
             app.fileMenu = uimenu(app.UIFigure, 'Text', 'File');
@@ -1863,11 +1975,33 @@ classdef SymphonyApp < matlab.apps.AppBase
 
             app.UIFigure.WindowKeyPressFcn = createCallbackFcn(app, @onWindowKeyPress, true);
 
+            app.UIFigure.SizeChangedFcn = @(~,~) app.onWindowResize();
+            app.onWindowResize();  % initial reflow
             app.UIFigure.Visible = 'on';
         end
     end
 
     methods (Access = public)
+        function applyProtocolPropertyMap(app, propertyMap)
+            % Apply a property map to the current protocol WITHOUT switching
+            % protocols. Public so modules (e.g. CommonControl, via
+            % ModuleAcquisitionAdapter) can push values in. Missing
+            % properties on the current protocol are skipped.
+            if ~isempty(app.currentProtocol) && ~isempty(propertyMap)
+                propKeys = propertyMap.keys;
+                for i = 1:numel(propKeys)
+                    k = propKeys{i};
+                    try
+                        app.currentProtocol.(k) = propertyMap(k);
+                    catch
+                    end
+                end
+            end
+            app.refreshProtocolPropertyGrid();
+            app.refreshAcquireControls();
+            app.refreshPreview();
+        end
+
         function app = SymphonyApp
             createComponents(app);
             registerApp(app, app.UIFigure);
@@ -1881,6 +2015,21 @@ classdef SymphonyApp < matlab.apps.AppBase
         function delete(app)
             % Run the Options cleanup file (if configured)
             app.runOptionsFile('cleanup');
+
+            % Close the rig BEFORE the rest of shutdown so hardware and
+            % network connections are released cleanly: the LightCrafter
+            % device disconnects its Stage-server socket (netbox serves one
+            % client at a time, so a lingering socket blocks the next
+            % session's rig init), and the MultiClamp telegraph is freed.
+            % Without this, quitting and reopening Symphony hangs on the
+            % next initializeRig. Mirrors the pre-init close at rig switch.
+            try
+                if ~isempty(app.currentRig)
+                    app.currentRig.close();
+                    app.currentRig = [];
+                end
+            catch
+            end
 
             % Close HDF5 file BEFORE shutdown to prevent dual-library crash.
             % MATLAB's built-in hdf5.dll and our C# HDF5 P/Invoke share the

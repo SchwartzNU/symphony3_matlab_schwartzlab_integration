@@ -118,7 +118,7 @@ classdef ProtocolScanner
             mc = metaclass(protocolObj);
             props = struct('name', {}, 'displayName', {}, 'value', {}, ...
                 'primitiveType', {}, 'isReadOnly', {}, 'isHidden', {}, ...
-                'description', {}, 'domain', {});
+                'description', {}, 'domain', {}, 'category', {});
 
             for i = 1:numel(mc.PropertyList)
                 mp = mc.PropertyList(i);
@@ -181,6 +181,18 @@ classdef ProtocolScanner
                 props(end).isHidden = isHidden;
                 props(end).description = desc;
                 props(end).domain = domain;
+                props(end).category = '';
+
+                % The extension encodes parameter grouping (category) and
+                % conditional show/hide (isHidden) in getPropertyDescriptor,
+                % which a metaclass scan does not see. Consult it, guarded so a
+                % throwing override degrades to the metaclass-derived values.
+                try
+                    d = protocolObj.getPropertyDescriptor(mp.Name);
+                    props(end).category = char(d.category);
+                    props(end).isHidden = logical(d.isHidden);
+                catch
+                end
             end
         end
 
