@@ -136,7 +136,14 @@ classdef ProtocolScanner
                     continue;
                 end
 
-                isHidden = mp.Hidden;
+                % Symphony 2 listed properties(obj), which never includes Hidden
+                % properties; extensions rely on that to keep rig configuration
+                % (filter wheel tables, projector params, *Type descriptors, ...)
+                % out of the parameter grid.
+                if mp.Hidden
+                    continue;
+                end
+                isHidden = false;
                 isReadOnly = mp.Constant || ~strcmp(mp.SetAccess, 'public') ...
                     || (mp.Dependent && isempty(mp.SetMethod));
 
@@ -149,6 +156,12 @@ classdef ProtocolScanner
 
                 % Infer primitive type from value
                 primType = symphonyui.ui.ProtocolScanner.inferType(val);
+                % Values the grid cannot edit (structs, objects, function handles,
+                % non-string cells) were not displayable in Symphony 2 either.
+                if isstruct(val) || isa(val, 'function_handle') ...
+                        || (isobject(val) && ~isstring(val)) || (iscell(val) && ~iscellstr(val))
+                    isHidden = true;
+                end
 
                 % Build display name from property name (camelCase → spaced)
                 dispName = symphonyui.ui.ProtocolScanner.humanize(mp.Name);
@@ -190,7 +203,11 @@ classdef ProtocolScanner
                 try
                     d = protocolObj.getPropertyDescriptor(mp.Name);
                     props(end).category = char(d.category);
-                    props(end).isHidden = logical(d.isHidden);
+                    props(end).isHidden = isHidden || logical(d.isHidden);
+                    props(end).isReadOnly = isReadOnly || logical(d.isReadOnly);
+                    if ~isempty(d.description) && isempty(props(end).description)
+                        props(end).description = char(d.description);
+                    end
                 catch
                 end
             end
@@ -291,4 +308,4 @@ classdef ProtocolScanner
         end
 
     end
-end
+end
