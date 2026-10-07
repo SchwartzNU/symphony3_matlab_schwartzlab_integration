@@ -271,6 +271,23 @@ classdef Protocol < handle
             obj.figureHandlerManager.closeFigures();
         end
 
+        function setFigureHandlerManager(obj, manager)
+            % Replaces the figure handler manager used by this protocol.
+            % Schwartz Lab modification (ported from the lab's Symphony 2):
+            % lets a module such as sa_labs.modules.ReceptiveFieldMapper, which
+            % subclasses FigureHandlerManager, receive this protocol's figure
+            % updates (updateFigures / closeFigures) while it runs.
+            if ~isa(manager, 'symphonyui.core.FigureHandlerManager')
+                error('Figure handler manager must be a symphonyui.core.FigureHandlerManager');
+            end
+            obj.figureHandlerManager = manager;
+        end
+
+        function m = getFigureHandlerManager(obj)
+            % Returns the figure handler manager used by this protocol.
+            m = obj.figureHandlerManager;
+        end
+
         function [tf, msg] = isValid(obj) %#ok<MANU>
             % Override to return true/false to indicate if this protocol is valid and should be able to run
             

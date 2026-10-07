@@ -1982,6 +1982,52 @@ classdef SymphonyApp < matlab.apps.AppBase
     end
 
     methods (Access = public)
+
+        % ---- Module-facing API (used by symphonyui.ui.ModuleAcquisitionAdapter) ----
+        % These expose the same code paths as the UI controls so extension
+        % modules (e.g. sa_labs.modules.ReceptiveFieldMapper) can drive
+        % acquisition exactly as a user would.
+
+        function selectProtocolById(app, protocolId)
+            % Select a protocol by class name (e.g. 'sa_labs.protocols.Pulse').
+            names = app.protocolIdsByDisplayName.keys;
+            for i = 1:numel(names)
+                if strcmp(app.protocolIdsByDisplayName(names{i}), protocolId)
+                    if ~strcmp(app.protocolPopupMenu.Value, names{i})
+                        app.protocolPopupMenu.Value = names{i};
+                        app.protocolPopupMenuValueChanged([]);
+                    end
+                    return;
+                end
+            end
+            error('Protocol ''%s'' was not found in the search paths', protocolId);
+        end
+
+        function p = getCurrentProtocol(app)
+            p = app.currentProtocol;
+        end
+
+        function viewOnly(app)
+            app.viewOnlyButtonPushed([]);
+        end
+
+        function record(app)
+            app.recordButtonPushed([]);
+        end
+
+        function stopAcquisition(app)
+            app.acquireStopSelected([]);
+        end
+
+        function s = getControllerState(app)
+            % Controller state as a symphonyui.core.ControllerState (or [] if
+            % no controller exists yet).
+            if isempty(app.controller)
+                s = [];
+            else
+                s = app.controller.state;
+            end
+        end
         function applyProtocolPropertyMap(app, propertyMap)
             % Apply a property map to the current protocol WITHOUT switching
             % protocols. Public so modules (e.g. CommonControl, via

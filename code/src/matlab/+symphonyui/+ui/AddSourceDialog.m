@@ -621,6 +621,31 @@ classdef AddSourceDialog < handle
                 descInstance = obj.sourceInstances{descIdx};
             end
 
+            % Schwartz Lab (ported from the lab's Symphony 2 / symphony-matlab
+            % PR #50): a source description whose constructor takes the parent
+            % source is built WITH the parent so it can validate or derive from
+            % it. sa_labs.sources.retina.Cell checks the parent retina's
+            % DataJoint ID, eye, orientation and experimenter; CellPair lists
+            % the sibling cell numbers. A constructor error aborts the add
+            % before anything is written to the file.
+            if ~isempty(descIdx)
+                try
+                    ctor = str2func(obj.sourceTypes(descIdx).id);
+                    if nargin(ctor) ~= 0 && ~isempty(char(parentId))
+                        parentSrc = obj.findPersistentSource(char(parentId));
+                        if isempty(parentSrc)
+                            error('Could not locate the parent source in the open file.');
+                        end
+                        descInstance = ctor(parentSrc);
+                    elseif isempty(descInstance)
+                        descInstance = ctor();
+                    end
+                catch ctorEx
+                    uialert(obj.fig, ctorEx.message, 'Add Source');
+                    return;
+                end
+            end
+
             try
                 % Step 1: Create the source via the C# host so the Data
                 % Manager tree stays in sync.
@@ -656,6 +681,30 @@ classdef AddSourceDialog < handle
             catch ex
                 fprintf(2, '\n=== Add Source Error ===\n%s\n', getReport(ex, 'extended'));
                 uialert(obj.fig, ex.message, 'Add Source Error');
+            end
+        end
+
+        function pSrc = findPersistentSource(obj, sourceId)
+            %FINDPERSISTENTSOURCE  MATLAB-side wrapper for the persisted source
+            %   with the given id (UUID, with or without dashes), or [].
+            pSrc = [];
+            try
+                cper = obj.host.GetPersistor();
+                if isempty(cper)
+                    return;
+                end
+                wanted = lower(strrep(sourceId, '-', ''));
+                allSrcs = symphonyui.ui.AddSourceDialog.collectAllSources(cper.Experiment);
+                for i = 1:numel(allSrcs)
+                    sid = lower(strrep(char(allSrcs{i}.UUID.ToString()), '-', ''));
+                    if strcmp(sid, wanted)
+                        factory = symphonyui.core.persistent.EntityFactory();
+                        pSrc = symphonyui.core.persistent.Source(allSrcs{i}, factory);
+                        return;
+                    end
+                end
+            catch ex
+                fprintf(2, 'findPersistentSource error: %s\n', ex.message);
             end
         end
 
