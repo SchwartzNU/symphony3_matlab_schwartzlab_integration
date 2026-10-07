@@ -2263,7 +2263,23 @@ classdef SymphonyDataManager < handle
                                 % Multi-select: serialize as JSON
                                 pSrc.setProperty(propName, newValue);
                             else
-                                pSrc.setProperty(propName, char(string(newValue)));
+                                % Coerce the edited text to the type the source
+                                % description declared (uint8 cell number, double
+                                % location, ...). Symphony 2's grid did this; writing
+                                % the raw text made e.g. 'number' an HDF5 string, which
+                                % the lab's DataJoint reader cannot parse.
+                                value = char(string(newValue));
+                                try
+                                    d = pSrc.getPropertyDescriptor(propName);
+                                    pt = char(d.type.primitiveType);
+                                    if ~any(strcmp(pt, {'char', 'cellstr', 'string'}))
+                                        value = SymphonyAppUtil.coerceValue(value, pt);
+                                    end
+                                catch coerceEx
+                                    fprintf(2, 'Property "%s": could not coerce "%s" to its declared type (%s); storing as text.\n', ...
+                                        propName, char(string(newValue)), coerceEx.message);
+                                end
+                                pSrc.setProperty(propName, value);
                             end
                             break;
                         end
@@ -2811,26 +2827,27 @@ classdef SymphonyDataManager < handle
                 pEG = obj.findPersistentEpochGroup(cper, groupId);
                 if isempty(pEG), return; end
 
+                % Go through the MATLAB entity wrapper so the value is coerced to
+                % the type the epoch group description declared (Symphony 2
+                % behaviour) instead of always being stored as text.
+                factory = symphonyui.core.persistent.EntityFactory();
+                pGroup = symphonyui.core.persistent.EpochGroup(pEG, factory);
                 if iscell(newValue)
-                    valStr = strjoin(newValue, ';');
+                    value = newValue;
                 else
-                    valStr = char(string(newValue));
-                end
-
-                % Try to update existing property, or add new one
-                try
-                    props = pEG.Properties;
-                    if props.ContainsKey(propName)
-                        props.Item(propName) = valStr;
-                    else
-                        pEG.AddProperty(propName, valStr);
-                    end
-                catch
+                    value = char(string(newValue));
                     try
-                        pEG.AddProperty(propName, valStr);
-                    catch
+                        d = pGroup.getPropertyDescriptor(propName);
+                        pt = char(d.type.primitiveType);
+                        if ~any(strcmp(pt, {'char', 'cellstr', 'string'}))
+                            value = SymphonyAppUtil.coerceValue(value, pt);
+                        end
+                    catch coerceEx
+                        fprintf(2, 'Property "%s": could not coerce "%s" to its declared type (%s); storing as text.\n', ...
+                            propName, char(string(newValue)), coerceEx.message);
                     end
                 end
+                pGroup.setProperty(propName, value);
             catch ex
                 fprintf(2, 'Failed to persist epoch group property "%s": %s\n', propName, ex.message);
             end
