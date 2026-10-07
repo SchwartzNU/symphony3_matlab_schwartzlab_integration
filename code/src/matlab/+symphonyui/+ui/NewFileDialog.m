@@ -229,6 +229,26 @@ classdef NewFileDialog < handle
             try
                 req = Symphony.Acquisition.Contracts.NewFileRequest(name, location, description);
                 obj.host.NewFileAsync(req).GetAwaiter().GetResult();
+
+                % Symphony 2 wrote the experiment description into the file
+                % (descriptionType + propertyDescriptors resources and the
+                % description's properties: experimenter, lab, project, ...),
+                % which downstream readers such as the lab's DataJoint importer
+                % rely on. The C# host only records the description id, so do
+                % the MATLAB part here exactly as Persistor.newPersistor did.
+                if ~isempty(description)
+                    try
+                        descInst = feval(str2func(description));
+                        cper = obj.host.GetPersistor();
+                        if ~isempty(cper)
+                            factory = symphonyui.core.persistent.EntityFactory();
+                            symphonyui.core.persistent.Experiment.newExperiment(cper.Experiment, factory, descInst);
+                        end
+                    catch descEx
+                        fprintf(2, 'New File: could not write experiment description %s: %s\n', description, descEx.message);
+                    end
+                end
+
                 obj.result = struct('success', true, 'experimentDescriptionId', description);
                 obj.closeDialog();
             catch ex

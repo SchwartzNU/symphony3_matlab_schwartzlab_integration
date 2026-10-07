@@ -327,23 +327,31 @@ classdef BeginEpochGroupDialog < handle
                 fprintf(2, 'writeEGDescProps: AddProperty(__epochGroupDescriptionId) failed: %s\n', resEx.message);
             end
 
-            % Write description properties from PropertyDescriptors
-            descList = descInst.getPropertyDescriptors();
-            for k = 1:numel(descList)
-                d = descList(k);
-                propName = d.name;
-                propVal = d.value;
-                try
-                    if iscell(propVal)
-                        valToWrite = strjoin(cellfun(@char, propVal, 'UniformOutput', false), ';');
-                    elseif isnumeric(propVal)
-                        valToWrite = num2str(propVal);
-                    else
-                        valToWrite = char(string(propVal));
+            % Write the description the way Symphony 2's Persistor.beginEpochGroup
+            % did: descriptionType + propertyDescriptors resources and the
+            % description's properties with their declared types (not text).
+            % Downstream readers (the lab's DataJoint importer) depend on it.
+            try
+                factory = symphonyui.core.persistent.EntityFactory();
+                symphonyui.core.persistent.EpochGroup.newEpochGroup(pEG, factory, descInst);
+            catch newEx
+                fprintf(2, 'writeEGDescProps: newEpochGroup failed (%s); falling back to text properties\n', newEx.message);
+                descList = descInst.getPropertyDescriptors();
+                for k = 1:numel(descList)
+                    d = descList(k);
+                    try
+                        propVal = d.value;
+                        if iscell(propVal)
+                            valToWrite = strjoin(cellfun(@char, propVal, 'UniformOutput', false), ';');
+                        elseif isnumeric(propVal)
+                            valToWrite = num2str(propVal);
+                        else
+                            valToWrite = char(string(propVal));
+                        end
+                        pEG.AddProperty(d.name, valToWrite);
+                    catch propWriteEx
+                        fprintf(2, '  FAILED to write prop "%s": %s\n', d.name, propWriteEx.message);
                     end
-                    pEG.AddProperty(propName, valToWrite);
-                catch propWriteEx
-                    fprintf(2, '  FAILED to write prop "%s": %s\n', propName, propWriteEx.message);
                 end
             end
 

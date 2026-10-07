@@ -347,6 +347,7 @@ classdef SymphonyApp < matlab.apps.AppBase
                     return;
                 end
                 app.showDataManager('Created');
+                app.persistRigDeviceResources();
                 % Pass experiment description ID to the Data Manager so it
                 % can populate the Properties tab from the MATLAB description.
                 if isstruct(result) && isfield(result, 'experimentDescriptionId') ...
@@ -1504,6 +1505,7 @@ classdef SymphonyApp < matlab.apps.AppBase
                     app.controller.resume();
                 else
                     persistor = app.getFilePersistor();
+                    app.persistRigDeviceResources();   % in case the rig was initialized after the file was created
                     app.enableRunningControls();
                     app.connectOutOfProcessWriter();
                     app.isAcquiring = true;
@@ -1987,6 +1989,48 @@ classdef SymphonyApp < matlab.apps.AppBase
         % These expose the same code paths as the UI controls so extension
         % modules (e.g. sa_labs.modules.ReceptiveFieldMapper) can drive
         % acquisition exactly as a user would.
+
+        function persistRigDeviceResources(app)
+            % Copy every rig device's resources (calibration tables, LightCrafter
+            % fits, configurationSettingDescriptors, ...) into the open file.
+            % Symphony 2's C# persistor did this when it serialized devices; the
+            % Symphony 3 host writes the device groups without their resources,
+            % and the lab's DataJoint importer builds its calibration map from
+            % them. Safe to call repeatedly: existing resources are skipped.
+            if isempty(app.currentRig)
+                return;
+            end
+            try
+                cper = app.host.GetPersistor();
+            catch
+                cper = [];
+            end
+            if isempty(cper)
+                return;
+            end
+            factory = symphonyui.core.persistent.EntityFactory();
+            devices = app.currentRig.devices;
+            for i = 1:numel(devices)
+                d = devices{i};
+                try
+                    names = d.getResourceNames();
+                    if isempty(names)
+                        continue;
+                    end
+                    cdev = cper.Device(d.name, d.manufacturer);   % get-or-add
+                    pd = factory.create(cdev);
+                    existing = pd.getResourceNames();
+                    for k = 1:numel(names)
+                        if any(strcmp(existing, names{k}))
+                            continue;
+                        end
+                        pd.addResource(names{k}, d.getResource(names{k}));
+                    end
+                catch ex
+                    fprintf(2, 'Could not persist resources of device %s: %s\n', char(d.name), ex.message);
+                end
+            end
+        end
 
         function selectProtocolById(app, protocolId)
             % Select a protocol by class name (e.g. 'sa_labs.protocols.Pulse').
