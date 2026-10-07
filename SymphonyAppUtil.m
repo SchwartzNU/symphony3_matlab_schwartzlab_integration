@@ -114,6 +114,12 @@ classdef SymphonyAppUtil
 
         function v = coerceValue(raw, primitiveType)
             t = lower(string(primitiveType));
+            % Symphony 2 / jide type names: denserealdouble, sparsecomplexsingle, ...
+            if contains(t, "double")
+                t = "double";
+            elseif contains(t, "single")
+                t = "single";
+            end
             switch t
                 case "double"
                     if ischar(raw) || isstring(raw)
