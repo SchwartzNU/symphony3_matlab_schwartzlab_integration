@@ -2270,7 +2270,10 @@ classdef SymphonyDataManager < handle
                                 % the lab's DataJoint reader cannot parse.
                                 value = char(string(newValue));
                                 try
-                                    d = pSrc.getPropertyDescriptor(propName);
+                                    d = pSrc.getPropertyDescriptors().findByName(propName);
+                                    if isempty(d)
+                                        error('no descriptor for %s', propName);
+                                    end
                                     pt = char(d.type.primitiveType);
                                     if ~any(strcmp(pt, {'char', 'cellstr', 'string'}))
                                         value = SymphonyAppUtil.coerceValue(value, pt);
@@ -2837,7 +2840,10 @@ classdef SymphonyDataManager < handle
                 else
                     value = char(string(newValue));
                     try
-                        d = pGroup.getPropertyDescriptor(propName);
+                        d = pGroup.getPropertyDescriptors().findByName(propName);
+                        if isempty(d)
+                            error('no descriptor for %s', propName);
+                        end
                         pt = char(d.type.primitiveType);
                         if ~any(strcmp(pt, {'char', 'cellstr', 'string'}))
                             value = SymphonyAppUtil.coerceValue(value, pt);

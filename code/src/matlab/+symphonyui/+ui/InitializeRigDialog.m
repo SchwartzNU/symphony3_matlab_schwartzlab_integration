@@ -107,6 +107,19 @@ classdef InitializeRigDialog < handle
                 obj.rigDropdown.Items = labels;
                 obj.rigIds = ids;
 
+                % Preselect the rig that was initialized last on this machine
+                % (Symphony 2 behaviour), so users do not have to pick it from a
+                % long list and cannot easily start the wrong one. Stored in
+                % this MATLAB release's preferences; see onInitialize.
+                try
+                    lastId = getpref('SymphonyUI', 'lastRigId', '');
+                    k = find(strcmp(ids, lastId), 1);
+                    if ~isempty(k)
+                        obj.rigDropdown.Value = labels{k};
+                    end
+                catch
+                end
+
                 % Widen the dialog to fit the longest description, since long
                 % rig names (e.g. 'SchwartzLab_Rig_A_DynamicClamp') otherwise
                 % truncate in the dropdown. Clamp to a sane range and recenter.
@@ -152,6 +165,10 @@ classdef InitializeRigDialog < handle
                 end
 
                 obj.result = rig;
+                try
+                    setpref('SymphonyUI', 'lastRigId', rigId);
+                catch
+                end
                 obj.closeDialog();
             catch ex
                 % Dump full stack trace to command window for debugging
