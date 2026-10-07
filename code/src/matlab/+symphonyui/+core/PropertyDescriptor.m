@@ -72,25 +72,28 @@ classdef PropertyDescriptor < matlab.mixin.SetGet %#ok<*MCSUP>
             % uiextras.jide.PropertyType(t.primitiveType, t.shape, t.domain).
             % IMPORTANT: Never save type as [] — Symphony 2's set.type does
             % t.primitiveType which crashes on []. Always provide a valid struct.
+            % Symphony 2 rebuilds the descriptor through uiextras.jide.PropertyGridField,
+            % which rejects a type whose shape does not fit the value ("Setting type
+            % ... would invalidate current property value") and then leaves the
+            % descriptor unusable (name empty). So the saved shape is always derived
+            % from the actual value, and 'double' is written as 'denserealdouble' etc.
+            v = obj.value;
+            inferred = symphonyui.core.PropertyType.autoDiscover(v);
             if ~isempty(obj.type) && isa(obj.type, 'symphonyui.core.PropertyType')
-                s.type = struct( ...
-                    'primitiveType', obj.type.primitiveType, ...
-                    'shape', obj.type.shape, ...
-                    'domain', {obj.type.domain});
-            else
-                % Default type matching Symphony 2's PropertyGridField default:
-                % unconstrained char/row with no domain restriction.
-                v = obj.value;
-                if ischar(v) || isstring(v)
-                    pt = 'char'; sh = 'row';
-                elseif islogical(v)
-                    pt = 'logical'; sh = 'scalar';
-                elseif isinteger(v)
-                    pt = 'int32'; sh = 'scalar';
-                else
-                    pt = 'denserealdouble'; sh = 'scalar';
+                pt = char(obj.type.primitiveType);
+                if any(strcmp(pt, {'double', 'single'}))
+                    pt = inferred.primitiveType;        % jide naming
                 end
-                s.type = struct('primitiveType', pt, 'shape', sh, 'domain', {{}});
+                sh = char(obj.type.shape);
+                if ~isempty(v) && ~strcmp(sh, inferred.shape) ...
+                        && ~(strcmp(sh, 'row') && strcmp(inferred.shape, 'scalar') && ischar(v))
+                    sh = inferred.shape;
+                end
+                dom = obj.type.domain;
+                if isempty(dom), dom = {}; end
+                s.type = struct('primitiveType', pt, 'shape', sh, 'domain', {dom});
+            else
+                s.type = struct('primitiveType', inferred.primitiveType, 'shape', inferred.shape, 'domain', {{}});
             end
             s.category = obj.category;
             s.displayName = obj.displayName;

@@ -64,14 +64,57 @@ classdef PropertyType < matlab.mixin.SetGet %#ok<*MCSUP>
         end
 
         function t = autoDiscover(value)
-            if islogical(value)
-                t = symphonyui.core.PropertyType('logical', 'scalar');
-            elseif isnumeric(value)
-                t = symphonyui.core.PropertyType(class(value), 'scalar');
-            elseif ischar(value) || isstring(value)
-                t = symphonyui.core.PropertyType('char', 'row');
+            % Same primitive names and shape rules as Symphony 2's
+            % uiextras.jide.PropertyType.AutoDiscover, so descriptors written by
+            % Symphony 3 load in Symphony 2 (its grid rejects a type whose shape
+            % does not fit the value, e.g. 'scalar' for a 1x2 location).
+            t = symphonyui.core.PropertyType( ...
+                symphonyui.core.PropertyType.primitiveTypeOf(value), ...
+                symphonyui.core.PropertyType.shapeOf(value));
+        end
+
+        function p = primitiveTypeOf(value)
+            clazz = class(value);
+            switch clazz
+                case {'logical', 'char', 'int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32', 'int64', 'uint64'}
+                    p = clazz;
+                case {'single', 'double'}
+                    if issparse(value), sparsity = 'sparse'; else, sparsity = 'dense'; end
+                    if isreal(value), complexity = 'real'; else, complexity = 'complex'; end
+                    p = [sparsity complexity clazz];
+                case 'string'
+                    p = 'char';
+                case 'cell'
+                    if iscellstr(value)
+                        p = 'cellstr';
+                    else
+                        p = 'char';
+                    end
+                otherwise
+                    p = 'char';
+            end
+        end
+
+        function s = shapeOf(value)
+            if isstring(value) && isscalar(value)
+                value = char(value);
+            end
+            if ndims(value) > 2 %#ok<ISMAT>
+                s = 'matrix';
+            elseif size(value, 1) == 1 && size(value, 2) == 1
+                s = 'scalar';
+            elseif size(value, 1) == 1
+                s = 'row';
+            elseif size(value, 2) == 1
+                s = 'column';
+            elseif size(value, 1) == 0 && size(value, 2) == 0
+                if ischar(value)
+                    s = 'row';
+                else
+                    s = 'empty';
+                end
             else
-                t = symphonyui.core.PropertyType('char', 'row');
+                s = 'matrix';
             end
         end
 
