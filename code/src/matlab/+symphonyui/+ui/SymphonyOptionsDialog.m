@@ -35,6 +35,7 @@ classdef SymphonyOptionsDialog < handle
         streamingThresholdField matlab.ui.control.EditField
         streamingMaxChunksField matlab.ui.control.EditField
         streamingTimeLabel matlab.ui.control.Label
+        figureModeDropdown matlab.ui.control.DropDown
         % Footer
         saveButton matlab.ui.control.Button
         defaultButton matlab.ui.control.Button
@@ -107,12 +108,14 @@ classdef SymphonyOptionsDialog < handle
             tabSearch = uitab(obj.tabGroup, 'Title', 'Search Path');
             tabLogging = uitab(obj.tabGroup, 'Title', 'Logging');
             tabStreaming = uitab(obj.tabGroup, 'Title', 'Streaming');
+            tabFigures = uitab(obj.tabGroup, 'Title', 'Figures');
 
             obj.buildGeneralCard(tabGeneral);
             obj.buildFileCard(tabFile);
             obj.buildSearchCard(tabSearch);
             obj.buildLoggingCard(tabLogging);
             obj.buildStreamingCard(tabStreaming);
+            obj.buildFiguresCard(tabFigures);
 
             foot = uigridlayout(main, [1 4]);
             foot.Layout.Row = 2;
@@ -322,6 +325,35 @@ classdef SymphonyOptionsDialog < handle
             helpLbl.Layout.Column = [1 3];
         end
 
+        function buildFiguresCard(obj, tab)
+            g = uigridlayout(tab, [2 2]);
+            g.Padding = [8 8 8 8];
+            g.RowHeight = {24, '1x'};
+            g.ColumnWidth = {160, '1x'};
+            g.RowSpacing = 6;
+            g.ColumnSpacing = 6;
+
+            Lm = uilabel(g, 'Text', 'Figure handlers:', 'HorizontalAlignment', 'right');
+            Lm.Layout.Row = 1; Lm.Layout.Column = 1;
+            obj.figureModeDropdown = uidropdown(g, ...
+                'Items', {'All protocol figures', 'Raw trace only', 'None'}, ...
+                'ItemsData', {'all', 'rawTrace', 'none'}, ...
+                'Value', 'all');
+            obj.figureModeDropdown.Layout.Row = 1;
+            obj.figureModeDropdown.Layout.Column = 2;
+
+            helpLbl = uilabel(g, ...
+                'Text', ['Figure plotting can never stop acquisition: a figure handler that errors ' ...
+                         'is closed and replaced by a raw ResponseFigure for its device, and the ' ...
+                         'other figures keep updating. "Raw trace only" skips protocol figures ' ...
+                         'entirely and shows just a ResponseFigure per device; "None" shows no ' ...
+                         'figures. This setting is read when a protocol run starts, so it applies ' ...
+                         'to the next run without restarting.'], ...
+                'WordWrap', 'on', 'FontSize', 11, 'FontColor', [0.4 0.4 0.4]);
+            helpLbl.Layout.Row = 2;
+            helpLbl.Layout.Column = [1 2];
+        end
+
         function updateStreamingTimeLabel(obj)
             try
                 nChunks = str2double(obj.streamingMaxChunksField.Value);
@@ -364,6 +396,11 @@ classdef SymphonyOptionsDialog < handle
             obj.streamingEnabledCheck.Value = logical(o.streamingEnabled);
             obj.streamingThresholdField.Value = num2str(o.streamingThreshold);
             obj.streamingMaxChunksField.Value = num2str(o.streamingMaxDisplayChunks);
+            try
+                obj.figureModeDropdown.Value = o.figureHandlerMode;
+            catch
+                obj.figureModeDropdown.Value = 'all';
+            end
             obj.updateStreamingTimeLabel();
         end
 
@@ -530,6 +567,8 @@ classdef SymphonyOptionsDialog < handle
             o.streamingEnabled = streamingEnabled;
             o.streamingThreshold = streamingThreshold;
             o.streamingMaxDisplayChunks = round(streamingMaxChunks);
+n            % Figures
+            o.figureHandlerMode = obj.figureModeDropdown.Value;
 
             try
                 o.save();

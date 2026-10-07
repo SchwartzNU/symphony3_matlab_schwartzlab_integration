@@ -14,6 +14,7 @@ classdef Options < appbox.Settings
         streamingEnabled
         streamingThreshold
         streamingMaxDisplayChunks
+        figureHandlerMode
     end
 
     methods
@@ -137,6 +138,29 @@ classdef Options < appbox.Settings
             obj.put('streamingMaxDisplayChunks', n);
         end
 
+
+        function m = get.figureHandlerMode(obj)
+            % 'all'      - show every figure a protocol asks for (default)
+            % 'rawTrace' - ignore protocol figures; show only a raw
+            %              ResponseFigure per device the protocol would have
+            %              plotted
+            % 'none'     - show no figures at all
+            % Read each time a figure is requested, so a change applies to the
+            % next run without restarting. Schwartz Lab addition: figure
+            % plotting must never be able to break acquisition.
+            m = obj.get('figureHandlerMode', 'all');
+            if ~any(strcmp(m, {'all', 'rawTrace', 'none'}))
+                m = 'all';
+            end
+        end
+
+        function set.figureHandlerMode(obj, m)
+            m = char(m);
+            if ~any(strcmp(m, {'all', 'rawTrace', 'none'}))
+                error('figureHandlerMode must be ''all'', ''rawTrace'' or ''none''');
+            end
+            obj.put('figureHandlerMode', m);
+        end
     end
 
     methods (Static)
