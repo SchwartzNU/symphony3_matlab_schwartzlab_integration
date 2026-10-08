@@ -688,9 +688,12 @@ classdef SymphonyApp < matlab.apps.AppBase
                     stop(existingTimers);
                     delete(existingTimers);
                 end
-                t = timer('TimerFcn', @(~,~)app.preloadModules(), ...
+                % The callback is guarded (SymphonyApp.preloadModulesIfValid):
+                % closing Symphony within the delay otherwise fires it on a
+                % deleted app ("Invalid or deleted object" in TimerFcn).
+                t = timer('TimerFcn', @(~,~)SymphonyApp.preloadModulesIfValid(app), ...
                     'StartDelay', 1, 'ExecutionMode', 'singleShot', ...
-                    'Tag', 'ModulePreloader', ...
+                    'Name', 'SymphonyModulePreloader', 'Tag', 'ModulePreloader', ...
                     'StopFcn', @(src,~)delete(src));
                 start(t);
             catch ex
@@ -1983,6 +1986,17 @@ classdef SymphonyApp < matlab.apps.AppBase
         end
     end
 
+    methods (Static)
+        function preloadModulesIfValid(app)
+            % Timer-safe entry to preloadModules: a timer callback cannot be
+            % an instance method call, because that errors before any
+            % isvalid check can run when the app has been deleted.
+            if isvalid(app)
+                app.preloadModules();
+            end
+        end
+    end
+
     methods (Access = public)
 
         % ---- Module-facing API (used by symphonyui.ui.ModuleAcquisitionAdapter) ----
@@ -2103,6 +2117,17 @@ classdef SymphonyApp < matlab.apps.AppBase
         end
 
         function delete(app)
+            % Stop the module preloader before anything else so it cannot
+            % fire on the deleted app (see initializeRig).
+            try
+                tm = timerfind('Tag', 'ModulePreloader');
+                if ~isempty(tm)
+                    stop(tm);
+                    delete(tm);
+                end
+            catch
+            end
+
             % Run the Options cleanup file (if configured)
             app.runOptionsFile('cleanup');
 

@@ -57,6 +57,24 @@ classdef ProtocolPresetsDialog < handle
             dlg = symphonyui.ui.ProtocolPresetsDialog(parentFigure, getProtocolFcn, applyPresetFcn, viewOnlyFcn, recordFcn, canRecordFcn);
             dlg.fig.Visible = 'on';
         end
+
+        function timerRefresh(src, obj)
+            % Refresh-timer callback (see constructor). Stops and deletes the
+            % timer when the dialog or its figure is gone, or when a refresh
+            % fails (e.g. the owning app was closed).
+            try
+                if isvalid(obj) && ~isempty(obj.fig) && isvalid(obj.fig)
+                    obj.updateButtons();
+                    return;
+                end
+            catch
+            end
+            try stop(src); catch, end
+            try delete(src); catch, end
+            if isvalid(obj)
+                obj.refreshTimer = [];
+            end
+        end
     end
 
     methods (Access = private)
@@ -74,10 +92,16 @@ classdef ProtocolPresetsDialog < handle
 
             % Periodically refresh button states so Record enables/disables
             % when epoch groups are opened/closed externally.
+            % The callback goes through a static method that receives the
+            % timer itself, so it can stop the timer even after this dialog
+            % object has been deleted (an instance call would error with
+            % "Invalid or deleted object" inside the TimerFcn).
             obj.refreshTimer = timer( ...
                 'ExecutionMode', 'fixedSpacing', ...
                 'Period', 2, ...
-                'TimerFcn', @(~,~)obj.onTimerRefresh());
+                'Name', 'ProtocolPresetsRefresh', ...
+                'Tag', 'ProtocolPresetsRefresh', ...
+                'TimerFcn', @(src,~)symphonyui.ui.ProtocolPresetsDialog.timerRefresh(src, obj));
             start(obj.refreshTimer);
         end
 
