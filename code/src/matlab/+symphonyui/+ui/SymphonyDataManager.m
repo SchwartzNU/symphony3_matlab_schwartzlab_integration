@@ -3187,6 +3187,8 @@ classdef SymphonyDataManager < handle
                 x = x(:)';
                 y = y(:)';
                 n = min(numel(x), numel(y));
+                symphonyui.ui.SymphonyDataManager.trace(sprintf('plot: trace [%s] %d samples, x %g..%g, y %g..%g', ...
+                    nm, n, min([x NaN]), max([x NaN]), min([y NaN]), max([y NaN])));
                 if n < 1
                     continue;
                 end
