@@ -391,6 +391,7 @@ classdef SymphonyDataManager < handle
                     isCurrent = logical(g.IsCurrent);
                     src = obj.sourceLabelForId(dm, g.SourceId);
                     label = sprintf('%s (%s)', char(g.Label), src);
+                    label = [label, symphonyui.ui.SymphonyDataManager.groupProtocolSuffix(dm, gid)];
                     if isCurrent, label = [label, ' *']; end
                     node.Text = label;
                 end
@@ -533,13 +534,19 @@ classdef SymphonyDataManager < handle
                 'KeyPressFcn', @(~, e) obj.onFigureKeyPress(e));
             symphonyui.ui.ViewSettings.restorePosition(obj.fig, 'DataManager');
 
-            uimenu(obj.fig, 'Text', 'Configure Devices', 'MenuSelectedFcn', @(~, ~)obj.menuConfigureDevices());
-            obj.menuAddSource = uimenu(obj.fig, 'Text', 'Add Source', 'MenuSelectedFcn', @(~, ~)obj.addSource());
-            obj.menuBeginEpochGroup = uimenu(obj.fig, 'Text', 'Begin Epoch Group', ...
-                'MenuSelectedFcn', @(~, ~)obj.beginEpochGroup(), 'Enable', 'off');
-            obj.menuEndEpochGroup = uimenu(obj.fig, 'Text', 'End Epoch Group', ...
+            % Menu bar grouped like Symphony 2's Data Manager (top-level
+            % uimenus in a uifigure render as one crowded row otherwise).
+            documentMenu = uimenu(obj.fig, 'Text', 'Document');
+            obj.menuAddSource = uimenu(documentMenu, 'Text', 'Add Source...', ...
+                'MenuSelectedFcn', @(~, ~)obj.addSource());
+            obj.menuBeginEpochGroup = uimenu(documentMenu, 'Text', 'Begin Epoch Group...', ...
+                'Separator', 'on', 'MenuSelectedFcn', @(~, ~)obj.beginEpochGroup(), 'Enable', 'off');
+            obj.menuEndEpochGroup = uimenu(documentMenu, 'Text', 'End Epoch Group', ...
                 'MenuSelectedFcn', @(~, ~)obj.endEpochGroup(), 'Enable', 'off');
-            uimenu(obj.fig, 'Text', 'Refresh', 'Separator', 'on', 'MenuSelectedFcn', @(~, ~)obj.refresh());
+            configureMenu = uimenu(obj.fig, 'Text', 'Configure');
+            uimenu(configureMenu, 'Text', 'Devices...', 'MenuSelectedFcn', @(~, ~)obj.menuConfigureDevices());
+            viewMenu = uimenu(obj.fig, 'Text', 'View');
+            uimenu(viewMenu, 'Text', 'Refresh', 'Accelerator', 'R', 'MenuSelectedFcn', @(~, ~)obj.refresh());
 
             % Main layout: use absolute positioning with splitters
             % Leave 24px at the bottom for the footer label
@@ -1388,6 +1395,7 @@ classdef SymphonyDataManager < handle
             gid = char(grp.Id);
             src = obj.sourceLabelForId(dm, grp.SourceId);
             label = sprintf('%s (%s)', char(grp.Label), src);
+            label = [label, symphonyui.ui.SymphonyDataManager.groupProtocolSuffix(dm, gid)];
             if logical(grp.IsCurrent)
                 label = [label, ' *'];
             end
@@ -3448,24 +3456,52 @@ classdef SymphonyDataManager < handle
 
     methods (Static, Access = private)
         function t = blockLabel(b)
-            % Tree label for an epoch block: the protocol's short name followed
-            % by the host's display name (time), e.g. "Pulse  14:20:05", like
-            % Symphony 2's Data Manager. Falls back to the display name.
+            % Tree label for an epoch block: the protocol's short name plus the
+            % host's time stamp, e.g. "Pulse [14:20:05]" instead of
+            % "sa_labs.protocols.Pulse [14:20:05]".
             t = '';
             try
                 t = char(string(b.DisplayName));
             catch
             end
             try
-                pid = char(string(b.ProtocolId));
-                parts = strsplit(pid, '.');
-                shortName = parts{end};
-                if ~isempty(shortName) && isempty(strfind(t, shortName)) %#ok<STREMP>
-                    if isempty(t)
+                shortName = symphonyui.ui.SymphonyDataManager.shortProtocolName(char(string(b.ProtocolId)));
+                stamp = regexp(t, '\[.*\]$', 'match', 'once');
+                if ~isempty(shortName)
+                    if isempty(stamp)
                         t = shortName;
                     else
-                        t = sprintf('%s  %s', shortName, t);
+                        t = sprintf('%s %s', shortName, stamp);
                     end
+                end
+            catch
+            end
+        end
+
+        function s = shortProtocolName(pid)
+            parts = strsplit(char(pid), '.');
+            s = parts{end};
+        end
+
+        function s = groupProtocolSuffix(dm, groupId)
+            % "  -  Pulse, MultiPulse": the distinct protocols recorded in an
+            % epoch group, in order of first appearance, so the tree shows what
+            % was run without expanding the group. Empty when there are none.
+            s = '';
+            try
+                names = {};
+                n = SymphonyAppUtil.getNetCount(dm.EpochBlocks);
+                for i = 1:n
+                    b = SymphonyAppUtil.getNetItem(dm.EpochBlocks, i);
+                    if strcmp(char(string(b.EpochGroupId)), char(string(groupId)))
+                        nm = symphonyui.ui.SymphonyDataManager.shortProtocolName(char(string(b.ProtocolId)));
+                        if ~isempty(nm) && ~any(strcmp(names, nm))
+                            names{end + 1} = nm; %#ok<AGROW>
+                        end
+                    end
+                end
+                if ~isempty(names)
+                    s = ['  -  ', strjoin(names, ', ')];
                 end
             catch
             end
