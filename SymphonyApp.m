@@ -134,7 +134,23 @@ classdef SymphonyApp < matlab.apps.AppBase
             dispatcher = symphonyui.core.createNetObj('Symphony.Acquisition.Bridge.StarterMatlabCommandDispatcher');
             app.host = symphonyui.core.callNetStatic('Symphony.Acquisition.HostFactory', 'CreateWithInProcessDispatcher', dispatcher);
 
-            initReq = symphonyui.core.createNetObj('Symphony.Acquisition.Contracts.HostInitRequest', ".", "", "", "./logs");
+            % Core (log4net) logging: configure it here, at startup, rather
+            % than in the lazily created legacy context, so every session
+            % leaves a log in Options -> loggingLogDirectory (~/.symphony/logs).
+            logDir = './logs';
+            try
+                opts = symphonyui.app.Options.getDefault();
+                logDir = char(opts.loggingLogDirectory);
+                if ~isfolder(logDir)
+                    mkdir(logDir);
+                end
+                Symphony.Core.Logging.ConfigureLogging(char(opts.loggingConfigurationFile), logDir);
+                fprintf('Symphony core logging to %s\n', logDir);
+            catch ex
+                fprintf(2, 'Symphony core logging not configured: %s\n', ex.message);
+            end
+
+            initReq = symphonyui.core.createNetObj('Symphony.Acquisition.Contracts.HostInitRequest', ".", "", "", logDir);
             app.awaitTask(app.host.InitializeAsync(initReq));
             app.awaitTask(app.host.InitializeRigAsync("io.github.symphony.rigs.SimRig"));
 
