@@ -82,14 +82,16 @@ classdef Measurement < symphonyui.core.CoreObject
             % without an explicit cache (rare, and on macOS the
             % Decimal property read here may also fail on the bridge —
             % the try/catch keeps that case from killing callers).
-            if ~isempty(obj.cachedQuantity)
-                q = obj.cachedQuantity;
-                return;
-            end
+            % Ask the .NET object: for a prefixed unit the base quantity
+            % differs from the quantity (1 mV -> 0.001 V). Returning the
+            % cached quantity here made Response.getData hand every figure
+            % base-unit values (volts, amperes) labelled mV / pA, which broke
+            % spike thresholds and amplitudes (Rig A, 2026-10-08). The cache
+            % is only a fallback for bridges where the Decimal read fails.
             try
                 q = System.Decimal.ToDouble(obj.cobj.QuantityInBaseUnits);
             catch
-                q = [];
+                q = obj.cachedQuantity;
             end
         end
 
