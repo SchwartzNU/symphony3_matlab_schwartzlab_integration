@@ -539,9 +539,10 @@ classdef SymphonyDataManager < handle
             documentMenu = uimenu(obj.fig, 'Text', 'Document');
             obj.menuAddSource = uimenu(documentMenu, 'Text', 'Add Source...', ...
                 'MenuSelectedFcn', @(~, ~)obj.addSource());
-            obj.menuBeginEpochGroup = uimenu(documentMenu, 'Text', 'Begin Epoch Group...', ...
-                'Separator', 'on', 'MenuSelectedFcn', @(~, ~)obj.beginEpochGroup(), 'Enable', 'off');
-            obj.menuEndEpochGroup = uimenu(documentMenu, 'Text', 'End Epoch Group', ...
+            obj.menuBeginEpochGroup = uimenu(documentMenu, 'Text', 'Begin Epoch Group...   Ctrl+B', ...
+                'Separator', 'on', ...
+                'MenuSelectedFcn', @(~, ~)obj.beginEpochGroup(), 'Enable', 'off');
+            obj.menuEndEpochGroup = uimenu(documentMenu, 'Text', 'End Epoch Group   Ctrl+E', ...
                 'MenuSelectedFcn', @(~, ~)obj.endEpochGroup(), 'Enable', 'off');
             configureMenu = uimenu(obj.fig, 'Text', 'Configure');
             uimenu(configureMenu, 'Text', 'Devices...', 'MenuSelectedFcn', @(~, ~)obj.menuConfigureDevices());
@@ -1549,11 +1550,29 @@ classdef SymphonyDataManager < handle
             obj.onTreeSelectionChanged(obj.tree, []);
         end
 
-        function onFigureKeyPress(~, event)
+        function onFigureKeyPress(obj, event)
             % Consume the Enter key so it does not deselect the current
             % tree node or trigger unwanted UI behavior.
             if strcmp(event.Key, 'return')
                 return;  % swallow the event
+            end
+            % Ctrl+B / Ctrl+E: begin / end epoch group (same as the main window).
+            mods = {};
+            try
+                mods = event.Modifier;
+            catch
+            end
+            if any(strcmpi(mods, 'control')) || any(strcmpi(mods, 'command'))
+                switch lower(event.Key)
+                    case 'b'
+                        if strcmp(obj.menuBeginEpochGroup.Enable, 'on')
+                            obj.beginEpochGroup();
+                        end
+                    case 'e'
+                        if strcmp(obj.menuEndEpochGroup.Enable, 'on')
+                            obj.endEpochGroup();
+                        end
+                end
             end
         end
 
@@ -1621,9 +1640,13 @@ classdef SymphonyDataManager < handle
                     % Lazy-load epochs under this block if not already loaded
                     obj.loadEpochsForBlock(eid);
                 case 'epoch'
+                    symphonyui.ui.SymphonyDataManager.trace('epoch: showCard');
                     obj.showCard('epoch');
+                    symphonyui.ui.SymphonyDataManager.trace('epoch: fillEpochCard');
                     obj.fillEpochCard(dm, eid);
+                    symphonyui.ui.SymphonyDataManager.trace('epoch: populateEntityTabs');
                     obj.populateEntityTabs(kind, eid);
+                    symphonyui.ui.SymphonyDataManager.trace('epoch: done');
                 case {'sources_folder', 'epoch_groups_folder'}
                     obj.showCard('empty');
                     obj.populateEntityTabsEmpty();
@@ -3026,7 +3049,9 @@ classdef SymphonyDataManager < handle
             end
             eid = char(string(epochId));
             try
+                symphonyui.ui.SymphonyDataManager.trace('fillEpochCard: GetEpochDataPreviewAsync');
                 prev = obj.awaitTaskWithResult(obj.host.GetEpochDataPreviewAsync(eid));
+                symphonyui.ui.SymphonyDataManager.trace('fillEpochCard: preview received');
                 if isempty(prev)
                     title(obj.epochAxes, 'Preview unavailable (empty host result).', 'FontSize', 12);
                     obj.epochAxesAddCenterPlaceholder('Host did not return preview data.');
@@ -3061,8 +3086,11 @@ classdef SymphonyDataManager < handle
                     drawnow limitrate;
                     return;
                 end
+                symphonyui.ui.SymphonyDataManager.trace('fillEpochCard: configure dropdown');
                 obj.configureEpochResponseDropdown(prev, false);
+                symphonyui.ui.SymphonyDataManager.trace('fillEpochCard: plot traces');
                 obj.plotEpochTracesFromPreview(prev);
+                symphonyui.ui.SymphonyDataManager.trace('fillEpochCard: plotted');
             catch ex
                 title(obj.epochAxes, sprintf('%s\n%s', 'Could not load waveforms', char(ex.message)), 'FontSize', 11);
                 obj.epochAxesAddCenterPlaceholder('Preview failed — see title for the error.');
@@ -3075,8 +3103,11 @@ classdef SymphonyDataManager < handle
                 uistack(obj.cardEpoch, 'top');
             catch
             end
+            symphonyui.ui.SymphonyDataManager.trace('fillEpochCard: refreshEpochAxesLayout');
             obj.refreshEpochAxesLayout();
+            symphonyui.ui.SymphonyDataManager.trace('fillEpochCard: drawnow');
             drawnow limitrate;
+            symphonyui.ui.SymphonyDataManager.trace('fillEpochCard: end');
         end
 
         function configureEpochResponseDropdown(obj, prev, emptyTraces)
@@ -3450,6 +3481,19 @@ classdef SymphonyDataManager < handle
                 uialert(obj.parentFigure, char(msg), title);
             catch
                 disp(msg);
+            end
+        end
+    end
+
+    methods (Static)
+        function trace(msg)
+            % Diagnostic trace of the epoch preview path; enable with
+            % setappdata(groot, 'SymphonyDMTrace', true).
+            try
+                if isequal(getappdata(groot, 'SymphonyDMTrace'), true)
+                    fprintf('DM %s %s\n', datestr(now, 'HH:MM:SS.FFF'), msg);
+                end
+            catch
             end
         end
     end

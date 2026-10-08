@@ -315,6 +315,10 @@ classdef SymphonyApp < matlab.apps.AppBase
                         app.fileOpenSelected();
                     case 't'
                         app.documentAddNoteSelected();
+                    case 'b'
+                        app.documentBeginEpochGroupSelected();
+                    case 'e'
+                        app.documentEndEpochGroupSelected();
                 end
             end
         end
@@ -1913,9 +1917,9 @@ classdef SymphonyApp < matlab.apps.AppBase
 
             app.addSourceMenu = uimenu(app.documentMenu, 'Text', 'Add Source...', ...
                 'MenuSelectedFcn', createCallbackFcn(app, @documentAddSourceSelected, true));
-            app.beginEpochGroupMenu = uimenu(app.documentMenu, 'Text', 'Begin Epoch Group...', 'Separator', 'on', ...
+            app.beginEpochGroupMenu = uimenu(app.documentMenu, 'Text', 'Begin Epoch Group...   Ctrl+B', 'Separator', 'on', ...
                 'MenuSelectedFcn', createCallbackFcn(app, @documentBeginEpochGroupSelected, true));
-            app.endEpochGroupMenu = uimenu(app.documentMenu, 'Text', 'End Epoch Group', ...
+            app.endEpochGroupMenu = uimenu(app.documentMenu, 'Text', 'End Epoch Group   Ctrl+E', ...
                 'MenuSelectedFcn', createCallbackFcn(app, @documentEndEpochGroupSelected, true));
             app.addNoteMenu = uimenu(app.documentMenu, 'Text', 'Add Note to Experiment...   Ctrl+T', 'Separator', 'on', ...
                 'MenuSelectedFcn', createCallbackFcn(app, @documentAddNoteSelected, true));
