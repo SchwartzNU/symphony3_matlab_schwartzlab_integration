@@ -45,11 +45,19 @@ classdef SymphonyLegacyContext < handle
             obj.configurationService = ConfigurationService(session, classRepository);
             obj.moduleService = ModuleService(session, classRepository, obj.documentationService, obj.acquisitionService, obj.configurationService);
 
+            % Configure log4net in the C# core. (This used to call
+            % NET.invokeStaticMethod, which does not exist in MATLAB, so the
+            % core never logged anything and crashes left no trace.)
             try
-                NET.invokeStaticMethod('Symphony.Core.Logging', 'ConfigureLogging', ...
-                    char(options.loggingConfigurationFile()), ...
-                    char(options.loggingLogDirectory()));
-            catch
+                logDir = char(options.loggingLogDirectory());
+                if ~isfolder(logDir)
+                    mkdir(logDir);
+                end
+                Symphony.Core.Logging.ConfigureLogging( ...
+                    char(options.loggingConfigurationFile()), logDir);
+                fprintf('Symphony core logging to %s\n', logDir);
+            catch ex
+                fprintf(2, 'Symphony core logging not configured: %s\n', ex.message);
             end
         end
 

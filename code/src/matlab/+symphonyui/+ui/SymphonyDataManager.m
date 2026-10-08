@@ -338,7 +338,7 @@ classdef SymphonyDataManager < handle
                 gid = char(b.EpochGroupId);
                 if existingIds.isKey(gid)
                     parentNode = existingIds(gid);
-                    bn = uitreenode(parentNode, 'Text', char(b.DisplayName), 'Icon', ic('block.png'));
+                    bn = uitreenode(parentNode, 'Text', symphonyui.ui.SymphonyDataManager.blockLabel(b), 'Icon', ic('block.png'));
                     bn.NodeData = struct('kind', 'epoch_block', 'id', bid);
                     try bn.ContextMenu = obj.makeEpochBlockContextMenu(bn); catch, end
                     existingIds(bid) = bn;
@@ -1136,7 +1136,7 @@ classdef SymphonyDataManager < handle
                 b = SymphonyAppUtil.getNetItem(dm.EpochBlocks, i);
                 if strcmp(char(string(b.EpochGroupId)), char(string(groupId)))
                     blockIds{end + 1} = char(string(b.Id)); %#ok<AGROW>
-                    blockLabels{end + 1} = char(string(b.DisplayName)); %#ok<AGROW>
+                    blockLabels{end + 1} = symphonyui.ui.SymphonyDataManager.blockLabel(b); %#ok<AGROW>
                 end
             end
         end
@@ -1232,7 +1232,7 @@ classdef SymphonyDataManager < handle
                                 if ~existingIds.isKey(blkId)
                                     % New epoch block
                                     blkNode = uitreenode(egNode, ...
-                                        'Text', char(blk.DisplayName), ...
+                                        'Text', symphonyui.ui.SymphonyDataManager.blockLabel(blk), ...
                                         'Icon', ic('block.png'));
                                     blkNode.NodeData = struct('kind', 'epoch_block', 'id', blkId);
                                 end
@@ -1408,7 +1408,7 @@ classdef SymphonyDataManager < handle
                 for i = 1:numel(blocks)
                     b = blocks{i};
                     bid = char(b.Id);
-                    bn = uitreenode(gn, 'Text', char(b.DisplayName), 'Icon', ic('block.png'));
+                    bn = uitreenode(gn, 'Text', symphonyui.ui.SymphonyDataManager.blockLabel(b), 'Icon', ic('block.png'));
                     bn.NodeData = struct('kind', 'epoch_block', 'id', bid);
                     try
                         bn.ContextMenu = obj.makeEpochBlockContextMenu(bn);
@@ -3404,6 +3404,9 @@ classdef SymphonyDataManager < handle
         function endEpochGroup(obj)
             try
                 obj.awaitTask(obj.host.EndEpochGroupAsync());
+                % Commit everything to disk (see symphonyui.ui.FileCheckpoint);
+                % SymphonyApp.getFilePersistor re-validates its wrapper.
+                symphonyui.ui.FileCheckpoint.run(obj.host, 'epochGroup');
                 obj.notifyAcquireRefresh();
                 % Full refresh needed for endEpochGroup since the tree
                 % structure changes (epoch group node state updates).
@@ -3444,6 +3447,30 @@ classdef SymphonyDataManager < handle
     end
 
     methods (Static, Access = private)
+        function t = blockLabel(b)
+            % Tree label for an epoch block: the protocol's short name followed
+            % by the host's display name (time), e.g. "Pulse  14:20:05", like
+            % Symphony 2's Data Manager. Falls back to the display name.
+            t = '';
+            try
+                t = char(string(b.DisplayName));
+            catch
+            end
+            try
+                pid = char(string(b.ProtocolId));
+                parts = strsplit(pid, '.');
+                shortName = parts{end};
+                if ~isempty(shortName) && isempty(strfind(t, shortName)) %#ok<STREMP>
+                    if isempty(t)
+                        t = shortName;
+                    else
+                        t = sprintf('%s  %s', shortName, t);
+                    end
+                end
+            catch
+            end
+        end
+
         function paths = buildSearchPaths()
             % Build the merged search paths: defaults + Options → Search Paths.
             % Mirrors SymphonyApp.getSearchPaths().

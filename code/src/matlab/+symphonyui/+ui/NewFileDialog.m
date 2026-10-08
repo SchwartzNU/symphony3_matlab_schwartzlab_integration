@@ -229,6 +229,7 @@ classdef NewFileDialog < handle
             try
                 req = Symphony.Acquisition.Contracts.NewFileRequest(name, location, description);
                 obj.host.NewFileAsync(req).GetAwaiter().GetResult();
+                symphonyui.ui.FileCheckpoint.setPath(fullPath);
 
                 % Symphony 2 wrote the experiment description into the file
                 % (descriptionType + propertyDescriptors resources and the

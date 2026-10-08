@@ -384,6 +384,7 @@ classdef SymphonyApp < matlab.apps.AppBase
                     return;
                 end
                 app.awaitTask(app.host.OpenFileAsync(fullfile(pathname, filename)));
+                symphonyui.ui.FileCheckpoint.setPath(fullfile(pathname, filename));
                 app.showDataManager('Opened');
                 app.refreshAcquireControls();
             catch ex
@@ -399,6 +400,7 @@ classdef SymphonyApp < matlab.apps.AppBase
                 if logical(app.awaitTaskWithResult(app.host.HasOpenFileAsync()))
                     app.runFileCleanupFunction();
                     app.awaitTask(app.host.CloseFileAsync());
+                    symphonyui.ui.FileCheckpoint.setPath('');
                 end
                 app.closeDataManager();
                 app.refreshAcquireControls();
@@ -531,7 +533,8 @@ classdef SymphonyApp < matlab.apps.AppBase
                     catch
                     end
                 end
-                app.refreshDataManagerView(false);
+                checkpointed = app.checkpointFile('epochGroup');
+                app.refreshDataManagerView(checkpointed);
                 app.hasOpenEpochGroup(true);   % force cache refresh
                 app.refreshAcquireControls();
             catch ex
@@ -1526,9 +1529,26 @@ classdef SymphonyApp < matlab.apps.AppBase
             % This ensures no concurrent HDF5 access.
             pause(0.2);
 
+            % Commit the run to disk (see symphonyui.ui.FileCheckpoint).
+            checkpointed = app.checkpointFile('run');
+
             app.resumeDataManagerAfterAcquisition();
             app.refreshAcquireControls();
-            app.refreshDataManagerView(false);  % incremental after recording
+            app.refreshDataManagerView(checkpointed);  % full rebuild if the file was reopened
+        end
+
+        function ok = checkpointFile(app, reason)
+            % Close and reopen the data file so everything recorded so far is
+            % on disk, keeping the open epoch groups. Returns true when done.
+            ok = false;
+            try
+                ok = symphonyui.ui.FileCheckpoint.run(app.host, reason);
+                if ok
+                    app.cachedPersistor = [];   % wrapped the closed document
+                end
+            catch ex
+                fprintf(2, 'checkpointFile: %s\n', ex.message);
+            end
         end
 
         function pauseButtonPushed(app, ~)
@@ -1702,14 +1722,18 @@ classdef SymphonyApp < matlab.apps.AppBase
             % (Creating a new Persistor each time causes MATLAB's GC to call
             % delete() on the old wrapper, which closes the underlying C# persistor.)
             try
-                % Return cached wrapper if it's still valid and open
+                % Return cached wrapper if it's still valid, open, and still
+                % wraps the host's current C# persistor (a file checkpoint
+                % replaces that object without changing IsClosed).
+                cper = app.host.GetPersistor();
                 if ~isempty(app.cachedPersistor) && isvalid(app.cachedPersistor) ...
-                        && ~app.cachedPersistor.isClosed
+                        && ~app.cachedPersistor.isClosed ...
+                        && ~isempty(cper) && System.Object.ReferenceEquals(app.cachedPersistor.cobj, cper)
                     p = app.cachedPersistor;
                     return;
                 end
+                app.cachedPersistor = [];
 
-                cper = app.host.GetPersistor();
                 if isempty(cper)
                     error('symphonyui:app:noFile', ...
                         'No data file is open. Create or open a file first.');
