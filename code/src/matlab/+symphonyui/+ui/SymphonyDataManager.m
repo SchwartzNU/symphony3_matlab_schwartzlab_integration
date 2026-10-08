@@ -1642,10 +1642,13 @@ classdef SymphonyDataManager < handle
                 case 'epoch'
                     symphonyui.ui.SymphonyDataManager.trace('epoch: showCard');
                     obj.showCard('epoch');
+                    symphonyui.ui.SymphonyDataManager.stepFlush('after showCard');
                     symphonyui.ui.SymphonyDataManager.trace('epoch: fillEpochCard');
                     obj.fillEpochCard(dm, eid);
+                    symphonyui.ui.SymphonyDataManager.stepFlush('after fillEpochCard');
                     symphonyui.ui.SymphonyDataManager.trace('epoch: populateEntityTabs');
                     obj.populateEntityTabs(kind, eid);
+                    symphonyui.ui.SymphonyDataManager.stepFlush('after populateEntityTabs');
                     symphonyui.ui.SymphonyDataManager.trace('epoch: done');
                 case {'sources_folder', 'epoch_groups_folder'}
                     obj.showCard('empty');
@@ -1696,30 +1699,18 @@ classdef SymphonyDataManager < handle
 
         function showCard(obj, which)
             obj.layoutDetailStack(which);
-            % Bring active card to top of cardStack child order (extra safety after resize).
-            try
-                switch which
-                    case 'empty'
-                        uistack(obj.cardEmpty, 'top');
-                    case 'experiment'
-                        uistack(obj.cardExperiment, 'top');
-                    case 'source'
-                        uistack(obj.cardSource, 'top');
-                    case 'epoch_group'
-                        uistack(obj.cardEpochGroup, 'top');
-                    case 'epoch_block'
-                        uistack(obj.cardEpochBlock, 'top');
-                    case 'epoch'
-                        uistack(obj.cardEpoch, 'top');
-                end
-            catch
-            end
+            symphonyui.ui.SymphonyDataManager.stepFlush('showCard: after layoutDetailStack');
+            % No uistack here: layoutDetailStack already shows exactly one card
+            % (Visible on/off), and uistack on the epoch card, which holds the
+            % uiaxes, wedged the uifigure's view sync so a full drawnow never
+            % returned and the preview never rendered (Rig A, 2026-10-08).
 
             % Adjust vertical splitter: give full space to tabs for
             % non-epoch entities; show waveform preview for epochs.
             try
                 if strcmp(which, 'epoch')
                     obj.vSplitter.setFraction(0.55);
+                    symphonyui.ui.SymphonyDataManager.stepFlush('showCard: after setFraction');
                     obj.refreshEpochAxesLayout();
                 else
                     % Minimize upper panel — all info is in the tabs
@@ -1727,6 +1718,7 @@ classdef SymphonyDataManager < handle
                 end
             catch
             end
+            symphonyui.ui.SymphonyDataManager.stepFlush('showCard: after splitter block');
             % Clear stale table data before drawnow to avoid
             % "Selection indices are out of data boundary" errors.
             try
@@ -1735,6 +1727,7 @@ classdef SymphonyDataManager < handle
                 end
             catch
             end
+            symphonyui.ui.SymphonyDataManager.stepFlush('showCard: after table clear');
             try
                 drawnow limitrate;
             catch
@@ -1744,6 +1737,7 @@ classdef SymphonyDataManager < handle
                 scroll(obj.cardStack, 'top');
             catch
             end
+            symphonyui.ui.SymphonyDataManager.stepFlush('showCard: after scroll');
         end
 
         function fillExperimentCard(obj, dm)
@@ -3078,10 +3072,6 @@ classdef SymphonyDataManager < handle
                     end
                     grid(obj.epochAxes, 'on');
                     obj.configureEpochResponseDropdown(prev, true);
-                    try
-                        uistack(obj.cardEpoch, 'top');
-                    catch
-                    end
                     obj.refreshEpochAxesLayout();
                     drawnow limitrate;
                     return;
@@ -3099,14 +3089,10 @@ classdef SymphonyDataManager < handle
                 catch
                 end
             end
-            try
-                uistack(obj.cardEpoch, 'top');
-            catch
-            end
             symphonyui.ui.SymphonyDataManager.trace('fillEpochCard: refreshEpochAxesLayout');
             obj.refreshEpochAxesLayout();
             symphonyui.ui.SymphonyDataManager.trace('fillEpochCard: drawnow');
-            drawnow;   % full flush: limitrate can leave the uiaxes un-rendered
+            drawnow limitrate;   % a full drawnow never returned in the live app (2026-10-08)
             symphonyui.ui.SymphonyDataManager.trace('fillEpochCard: end');
         end
 
@@ -3502,6 +3488,19 @@ classdef SymphonyDataManager < handle
     end
 
     methods (Static)
+        function stepFlush(msg)
+            % Bisection aid: with setappdata(groot, 'SymphonyDMStepFlush', true)
+            % do a full drawnow after each epoch-selection step and trace it.
+            try
+                if isequal(getappdata(groot, 'SymphonyDMStepFlush'), true)
+                    symphonyui.ui.SymphonyDataManager.trace(['flush ' msg ' ...']);
+                    drawnow;
+                    symphonyui.ui.SymphonyDataManager.trace(['flush ' msg ' ok']);
+                end
+            catch
+            end
+        end
+
         function trace(msg)
             % Diagnostic trace of the epoch preview path; enable with
             % setappdata(groot, 'SymphonyDMTrace', true).
