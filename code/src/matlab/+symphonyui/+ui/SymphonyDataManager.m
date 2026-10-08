@@ -71,6 +71,7 @@ classdef SymphonyDataManager < handle
         % When true, blocks all HDF5 reads (tree refresh, property display,
         % epoch plotting) to prevent concurrent access with C# writes.
         acquisitionMode logical = false
+        sourceLabelCache    % containers.Map source id -> tree label (Retina: label + DJID + eye)
     end
 
     methods
@@ -252,6 +253,7 @@ classdef SymphonyDataManager < handle
             try
                 dm = obj.awaitTaskWithResult(obj.host.GetDataManagerStateAsync());
                 obj.lastDm = dm;
+                obj.sourceLabelCache = containers.Map();   % properties may have been edited
                 if fullRebuild
                     obj.populateTree(dm);
                     obj.populateEntityTabsEmpty();
@@ -1194,7 +1196,7 @@ classdef SymphonyDataManager < handle
                     continue;
                 end
                 nid = char(s.Id);
-                sn = uitreenode(parentNode, 'Text', char(s.Label), 'Icon', ic('source.png'));
+                sn = uitreenode(parentNode, 'Text', obj.sourceDisplayLabel(s), 'Icon', ic('source.png'));
                 sn.NodeData = struct('kind', 'source', 'id', nid);
                 try
                     sn.ContextMenu = obj.makeSourceContextMenu(sn);
@@ -1445,6 +1447,62 @@ classdef SymphonyDataManager < handle
             end
         end
 
+        function t = sourceDisplayLabel(obj, s)
+            % Tree label for a source. A retina shows its DataJoint id and eye,
+            % e.g. "Retina (DJID 1234, left)", read once from the entity
+            % properties and cached until the next state refresh. Never reads
+            % during acquisition (host reads share the writer's HDF5 library).
+            t = char(string(s.Label));
+            sid = '';
+            try
+                sid = char(string(s.Id));
+            catch
+            end
+            if isempty(sid)
+                return;
+            end
+            if isempty(obj.sourceLabelCache)
+                obj.sourceLabelCache = containers.Map();
+            end
+            if obj.sourceLabelCache.isKey(sid)
+                t = obj.sourceLabelCache(sid);
+                return;
+            end
+            if obj.acquisitionMode
+                return;   % do not cache; retry after the run
+            end
+            try
+                d = obj.awaitTaskWithResult(obj.host.GetEntityDetailAsync('source', sid));
+                djid = '';
+                eye = '';
+                n = SymphonyAppUtil.getNetCount(d.Properties);
+                for i = 1:n
+                    r = SymphonyAppUtil.getNetItem(d.Properties, i);
+                    name = char(string(r.Name));
+                    val = strtrim(char(string(r.Value)));
+                    switch lower(name)
+                        case {'datajoint identifier', 'djid'}
+                            djid = val;
+                        case {'eye', 'side'}
+                            eye = val;
+                    end
+                end
+                parts = {};
+                if ~isempty(djid) && ~strcmp(djid, '0')
+                    parts{end+1} = ['DJID ' djid];
+                end
+                if ~isempty(eye)
+                    parts{end+1} = eye;
+                end
+                if ~isempty(parts)
+                    t = sprintf('%s (%s)', t, strjoin(parts, ', '));
+                end
+                obj.sourceLabelCache(sid) = t;
+            catch
+                % leave the plain label; not cached so a later refresh retries
+            end
+        end
+
         function sl = sourceLabelForId(obj, dm, sourceId)
             sl = '?';
             if isempty(sourceId)
@@ -1456,7 +1514,7 @@ classdef SymphonyDataManager < handle
             for i = 1:n
                 s = SymphonyAppUtil.getNetItem(dm.Sources, i);
                 if strcmp(char(s.Id), sid)
-                    sl = char(s.Label);
+                    sl = obj.sourceDisplayLabel(s);
                     return;
                 end
             end
