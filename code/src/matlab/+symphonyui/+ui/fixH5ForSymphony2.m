@@ -212,20 +212,12 @@ end
 
 function ts = inferTypeStruct(val)
     %INFERTYPESTRUCT  Build a valid type struct from a property value.
-    %   Produces {primitiveType, shape, domain} matching what Symphony 2's
-    %   uiextras.jide.PropertyType expects.
-    if ischar(val) || isstring(val)
-        pt = 'char'; sh = 'row';
-    elseif islogical(val)
-        pt = 'logical'; sh = 'scalar';
-    elseif isinteger(val)
-        pt = 'int32'; sh = 'scalar';
-    elseif iscell(val)
-        pt = 'cellstr'; sh = 'row';
-    else
-        pt = 'denserealdouble'; sh = 'scalar';
-    end
-    ts = struct('primitiveType', pt, 'shape', sh, 'domain', {{}});
+    %   Uses the same primitive-name and shape rules as Symphony 2's
+    %   uiextras.jide.PropertyType.AutoDiscover (via PropertyType.autoDiscover),
+    %   so e.g. a 1x2 location becomes denserealdouble/row, not scalar; Symphony 2's
+    %   property grid rejects a shape that does not fit the value.
+    t = symphonyui.core.PropertyType.autoDiscover(val);
+    ts = struct('primitiveType', t.primitiveType, 'shape', t.shape, 'domain', {{}});
 end
 
 function writeByteDataset(h5path, dataPath, newBytes)
