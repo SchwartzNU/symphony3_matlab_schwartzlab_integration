@@ -3106,7 +3106,7 @@ classdef SymphonyDataManager < handle
             symphonyui.ui.SymphonyDataManager.trace('fillEpochCard: refreshEpochAxesLayout');
             obj.refreshEpochAxesLayout();
             symphonyui.ui.SymphonyDataManager.trace('fillEpochCard: drawnow');
-            drawnow limitrate;
+            drawnow;   % full flush: limitrate can leave the uiaxes un-rendered
             symphonyui.ui.SymphonyDataManager.trace('fillEpochCard: end');
         end
 
@@ -3176,6 +3176,8 @@ classdef SymphonyDataManager < handle
             diag = obj.readPreviewDiagnostics(prev);
             hold(obj.epochAxes, 'on');
             plotted = 0;
+            xr = [Inf, -Inf];
+            yr = [Inf, -Inf];
             for i = 1:nt
                 tr = SymphonyAppUtil.getNetItem(prev.Traces, i);
                 nm = char(string(tr.Name));
@@ -3196,8 +3198,20 @@ classdef SymphonyDataManager < handle
                 y = y(1:n);
                 plot(obj.epochAxes, x, y, 'DisplayName', nm, 'LineWidth', 0.9);
                 plotted = plotted + 1;
+                xr = [min([xr(1), x]), max([xr(2), x])];
+                yr = [min([yr(1), y]), max([yr(2), y])];
             end
             hold(obj.epochAxes, 'off');
+            % Set the limits explicitly. In the running app the uiaxes'
+            % automatic limit update never ran (limits stayed [0 1] with the
+            % trace outside the view, Rig A 2026-10-08), so do not rely on it.
+            if plotted > 0 && all(isfinite([xr yr]))
+                if xr(2) <= xr(1), xr(2) = xr(1) + 1; end
+                pad = 0.05 * (yr(2) - yr(1));
+                if pad <= 0, pad = max(1, abs(yr(1)) * 0.01); end
+                obj.epochAxes.XLim = xr;
+                obj.epochAxes.YLim = [yr(1) - pad, yr(2) + pad];
+            end
             if plotted == 0
                 title(obj.epochAxes, 'No data for this selection', 'FontSize', 12);
                 obj.epochAxesAddCenterPlaceholder('Pick another device or choose All traces.');
