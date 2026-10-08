@@ -1617,6 +1617,21 @@ classdef SymphonyDataManager < handle
             obj.currentSelection = nd;
             kind = char(string(nd.kind));
             dm = obj.lastDm;
+            % While a run is recording, every host-side read (entity details,
+            % epoch preview) goes through the same HDF5 library the writer
+            % thread is using; that library is not thread-safe and aborted
+            % MATLAB mid-block on Rig A (2026-10-08). Defer the reads.
+            if obj.acquisitionMode
+                obj.showCard('empty');
+                obj.populateEntityTabsEmpty();
+                try
+                    cla(obj.epochAxes);
+                    title(obj.epochAxes, 'Recording in progress', 'FontSize', 12);
+                    obj.epochAxesAddCenterPlaceholder('Details and waveform previews are available when the run finishes.');
+                catch
+                end
+                return;
+            end
             eid = char(string(nd.id));
             switch kind
                 case 'experiment'
