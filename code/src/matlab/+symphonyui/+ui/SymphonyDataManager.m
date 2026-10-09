@@ -394,7 +394,7 @@ classdef SymphonyDataManager < handle
                     node = existingIds(gid);
                     isCurrent = logical(g.IsCurrent);
                     src = obj.sourceLabelForId(dm, g.SourceId);
-                    label = sprintf('%s (%s)', char(g.Label), src);
+                    label = sprintf('%s: %s', char(g.Label), src);
                     label = [label, symphonyui.ui.SymphonyDataManager.groupProtocolSuffix(dm, gid)];
                     if isCurrent, label = [label, ' *']; end
                     node.Text = label;
@@ -1401,7 +1401,7 @@ classdef SymphonyDataManager < handle
         function addEpochGroupBranch(obj, parentNode, grp, dm, ic, blocksByGroup)
             gid = char(grp.Id);
             src = obj.sourceLabelForId(dm, grp.SourceId);
-            label = sprintf('%s (%s)', char(grp.Label), src);
+            label = sprintf('%s: %s', char(grp.Label), src);
             label = [label, symphonyui.ui.SymphonyDataManager.groupProtocolSuffix(dm, gid)];
             if logical(grp.IsCurrent)
                 label = [label, ' *'];
@@ -1455,7 +1455,8 @@ classdef SymphonyDataManager < handle
 
         function t = sourceDisplayLabel(obj, s)
             % Tree label for a source. A retina shows its DataJoint id and eye,
-            % e.g. "Retina (DJID 1234, left)", read once from the entity
+            % e.g. "Retina (DJID 1234, left)"; a cell shows its type, e.g.
+            % "3 (ON alpha)" or "3 (ON alpha, confirmed OFF alpha)", read once from the entity
             % properties and cached until the next state refresh. Never reads
             % during acquisition (host reads share the writer's HDF5 library).
             t = char(string(s.Label));
@@ -1481,6 +1482,8 @@ classdef SymphonyDataManager < handle
                 d = obj.awaitTaskWithResult(obj.host.GetEntityDetailAsync('source', sid));
                 djid = '';
                 eye = '';
+                ctype = '';
+                confirmed = '';
                 n = SymphonyAppUtil.getNetCount(d.Properties);
                 for i = 1:n
                     r = SymphonyAppUtil.getNetItem(d.Properties, i);
@@ -1491,6 +1494,10 @@ classdef SymphonyDataManager < handle
                             djid = val;
                         case {'eye', 'side'}
                             eye = val;
+                        case 'type'
+                            ctype = val;
+                        case 'confirmedtype'
+                            confirmed = val;
                     end
                 end
                 parts = {};
@@ -1499,6 +1506,12 @@ classdef SymphonyDataManager < handle
                 end
                 if ~isempty(eye)
                     parts{end+1} = eye;
+                end
+                if ~isempty(ctype)
+                    parts{end+1} = ctype;
+                end
+                if ~isempty(confirmed) && ~strcmpi(confirmed, ctype)
+                    parts{end+1} = ['confirmed ' confirmed];
                 end
                 if ~isempty(parts)
                     t = sprintf('%s (%s)', t, strjoin(parts, ', '));
