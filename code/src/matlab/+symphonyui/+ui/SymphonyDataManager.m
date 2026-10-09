@@ -343,6 +343,7 @@ classdef SymphonyDataManager < handle
                     bn = uitreenode(parentNode, 'Text', symphonyui.ui.SymphonyDataManager.blockLabel(b), 'Icon', ic('block.png'));
                     bn.NodeData = struct('kind', 'epoch_block', 'id', bid);
                     try bn.ContextMenu = obj.makeEpochBlockContextMenu(bn); catch, end
+                    obj.addBlockPlaceholder(bn);
                     existingIds(bid) = bn;
                 end
             end
@@ -357,7 +358,7 @@ classdef SymphonyDataManager < handle
                 if ~existingIds.isKey(bid), continue; end
                 blockNode = existingIds(bid);
                 % Only refresh blocks that already have children loaded
-                if isempty(blockNode.Children), continue; end
+                if ~obj.blockEpochsLoaded(blockNode), continue; end
                 % Count existing epoch nodes
                 existingEpochIds = containers.Map();
                 for c = 1:numel(blockNode.Children)
@@ -571,6 +572,7 @@ classdef SymphonyDataManager < handle
             obj.tree.Layout.Row = 1;
             obj.tree.Layout.Column = 1;
             obj.tree.SelectionChangedFcn = @(s, e) obj.onTreeSelectionChanged(s, e);
+            obj.tree.NodeExpandedFcn = @(s, e) obj.onNodeExpanded(e.Node);
             obj.buildTreeContextMenus();
 
             % Vertical splitter in the right panel: detail cards (top) | tabs (bottom)
@@ -1245,6 +1247,7 @@ classdef SymphonyDataManager < handle
                                         'Text', symphonyui.ui.SymphonyDataManager.blockLabel(blk), ...
                                         'Icon', ic('block.png'));
                                     blkNode.NodeData = struct('kind', 'epoch_block', 'id', blkId);
+                                    obj.addBlockPlaceholder(blkNode);
                                 end
                             end
                         end
@@ -1425,8 +1428,10 @@ classdef SymphonyDataManager < handle
                         bn.ContextMenu = obj.makeEpochBlockContextMenu(bn);
                     catch
                     end
-                    % Epochs are loaded lazily when the block is selected
-                    % (see onTreeSelectionChanged). Don't load them here.
+                    % Epochs are loaded lazily when the block is selected or expanded
+                    % (onTreeSelectionChanged / onNodeExpanded). The placeholder child
+                    % gives the node its expand arrow until then.
+                    obj.addBlockPlaceholder(bn);
                 end
             end
 
@@ -1734,7 +1739,6 @@ classdef SymphonyDataManager < handle
 
         function loadEpochsForBlock(obj, blockId)
             % Lazy-load epoch nodes under the selected epoch block.
-            % Only loads if the block node has no children yet.
             try
                 selectedNode = obj.tree.SelectedNodes;
                 if isempty(selectedNode), return; end
@@ -1742,31 +1746,90 @@ classdef SymphonyDataManager < handle
                 nd = node.NodeData;
                 if ~isstruct(nd) || ~strcmp(nd.kind, 'epoch_block'), return; end
                 if ~strcmp(nd.id, blockId), return; end
-
-                % Already has epoch children?
-                if ~isempty(node.Children), return; end
-
-                % Fetch epochs on-demand from the C# host. This avoids
-                % including all epochs in the main BuildState() DTO,
-                % which was O(n) in HDF5 reads and took 3-5 seconds
-                % with 800+ epochs in previous epoch groups.
-                ic = @obj.iconIfAny;
-                epochs = obj.awaitTaskWithResult(obj.host.GetEpochsForBlockAsync(blockId));
-                nEpochs = SymphonyAppUtil.getNetCount(epochs);
-                for j = 1:nEpochs
-                    ep = SymphonyAppUtil.getNetItem(epochs, j);
-                    en = uitreenode(node, 'Text', char(ep.DisplayName), ...
-                        'Icon', ic('epoch.png'));
-                    en.NodeData = struct('kind', 'epoch', 'id', char(ep.Id));
-                    try en.ContextMenu = obj.makeEpochContextMenu(en); catch, end
-                end
-
-                % Expand the block node to show epochs
-                if ~isempty(node.Children)
-                    expand(node);
-                end
+                obj.loadEpochsForBlockNode(node);
             catch ex
                 fprintf(2, 'loadEpochsForBlock error: %s\n', ex.message);
+            end
+        end
+
+        function onNodeExpanded(obj, node)
+            % Expand arrow clicked on an epoch block that still has only its
+            % placeholder child: load the epochs. Same guard as
+            % onTreeSelectionChanged: no host-side reads while recording.
+            try
+                if isempty(node) || ~isvalid(node), return; end
+                nd = node.NodeData;
+                if ~isstruct(nd) || ~isfield(nd, 'kind') || ~strcmp(char(string(nd.kind)), 'epoch_block'), return; end
+                if obj.acquisitionMode, return; end
+                obj.loadEpochsForBlockNode(node);
+            catch ex
+                fprintf(2, 'onNodeExpanded error: %s\n', ex.message);
+            end
+        end
+
+        function loadEpochsForBlockNode(obj, node)
+            % Fetch the block's epochs on demand from the C# host (keeps the
+            % main BuildState() DTO free of epochs: O(n) HDF5 reads, 3-5 s with
+            % 800+ epochs) and replace the placeholder child with one node per
+            % epoch. No-op when the epochs are already loaded. Display only.
+            if obj.blockEpochsLoaded(node), return; end
+            nd = node.NodeData;
+            blockId = char(string(nd.id));
+            ic = @obj.iconIfAny;
+            epochs = obj.awaitTaskWithResult(obj.host.GetEpochsForBlockAsync(blockId));
+            nEpochs = SymphonyAppUtil.getNetCount(epochs);
+            obj.removeBlockPlaceholder(node);
+            for j = 1:nEpochs
+                ep = SymphonyAppUtil.getNetItem(epochs, j);
+                en = uitreenode(node, 'Text', char(ep.DisplayName), ...
+                    'Icon', ic('epoch.png'));
+                en.NodeData = struct('kind', 'epoch', 'id', char(ep.Id));
+                try en.ContextMenu = obj.makeEpochContextMenu(en); catch, end
+            end
+            if ~isempty(node.Children)
+                expand(node);
+            end
+        end
+
+        function addBlockPlaceholder(~, blockNode)
+            % uitree only draws the expand arrow for nodes that have children,
+            % so a block whose epochs are not loaded yet looked like a leaf.
+            % Give it a placeholder child (removed when the epochs load).
+            try
+                if isempty(blockNode.Children)
+                    ph = uitreenode(blockNode, 'Text', 'loading epochs...');
+                    ph.NodeData = struct('kind', 'placeholder', 'id', '');
+                end
+            catch
+            end
+        end
+
+        function removeBlockPlaceholder(~, blockNode)
+            try
+                ch = blockNode.Children;
+                for i = numel(ch):-1:1
+                    d = ch(i).NodeData;
+                    if isstruct(d) && isfield(d, 'kind') && strcmp(char(string(d.kind)), 'placeholder')
+                        delete(ch(i));
+                    end
+                end
+            catch
+            end
+        end
+
+        function tf = blockEpochsLoaded(~, blockNode)
+            % True once the block node has real epoch children (not only the placeholder).
+            tf = false;
+            try
+                ch = blockNode.Children;
+                for i = 1:numel(ch)
+                    d = ch(i).NodeData;
+                    if isstruct(d) && isfield(d, 'kind') && strcmp(char(string(d.kind)), 'epoch')
+                        tf = true;
+                        return;
+                    end
+                end
+            catch
             end
         end
 
