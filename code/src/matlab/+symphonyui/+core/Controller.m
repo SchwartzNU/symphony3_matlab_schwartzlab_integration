@@ -14,6 +14,9 @@ classdef Controller < symphonyui.core.CoreObject
     properties (Access = private)
         epochQueueDuration  % Current duration of the epoch queue
         stopAfterEpoch = false  % When true, stop after the current epoch completes (saving it)
+        stopRequestedTic = []   % tic of the first stop request of this run (stop watchdog)
+        stopEscalation = 0      % 0 none, 1 core RequestStop forced, 2 DAQ stopped, 3 gave up
+        stopEscalationTic = []
     end
 
     properties (Constant, Access = private)
@@ -103,6 +106,7 @@ classdef Controller < symphonyui.core.CoreObject
         function requestStop(obj)
             % Requests this controller stop and discard all incomplete buffered epochs.
 
+            obj.noteStopRequest('requestStop');
             obj.stopAfterEpoch = false;
             if obj.state.isPaused()
                 obj.state = symphonyui.core.ControllerState.STOPPED;
@@ -120,6 +124,7 @@ classdef Controller < symphonyui.core.CoreObject
             % Requests this controller stop after the current epoch completes
             % and saves it. The epoch finishes naturally and is persisted.
 
+            obj.noteStopRequest('requestStopAfterEpoch');
             if obj.state.isPaused()
                 obj.state = symphonyui.core.ControllerState.STOPPED;
                 obj.completeRun();
@@ -139,6 +144,7 @@ classdef Controller < symphonyui.core.CoreObject
             % This is useful for long streaming epochs where the user wants
             % to stop early but keep the data collected so far.
 
+            obj.noteStopRequest('requestStopAndSavePartial');
             if obj.state.isPaused()
                 obj.state = symphonyui.core.ControllerState.STOPPED;
                 obj.completeRun();
@@ -216,6 +222,9 @@ classdef Controller < symphonyui.core.CoreObject
             import symphonyui.core.ControllerState;
 
             obj.stopAfterEpoch = false;
+            obj.stopRequestedTic = [];
+            obj.stopEscalation = 0;
+            obj.stopEscalationTic = [];
             obj.currentProtocol = protocol;
             obj.currentPersistor = persistor;
 
@@ -500,6 +509,7 @@ classdef Controller < symphonyui.core.CoreObject
                     % Log but continue acquisition.
                     fprintf(2, 'WARNING: Error during pause (acquisition continues): %s\n', pauseEx.message);
                 end
+                if obj.stopWatchdog(), break; end
                 % Update streaming figures periodically
                 if toc(lastStreamUpdate) >= streamingUpdateInterval
                     try
@@ -515,10 +525,13 @@ classdef Controller < symphonyui.core.CoreObject
                     end
                 end
             end
-            obj.tryCore(@()obj.cobj.WaitForCompletedEpochTasks());
+            if obj.stopEscalation < 3
+                obj.tryCore(@()obj.cobj.WaitForCompletedEpochTasks());
+            end
 
             while ~task.IsCompleted
                 pause(0.01);
+                if obj.stopWatchdog(), break; end
                 if toc(lastStreamUpdate) >= streamingUpdateInterval
                     try obj.updateStreamingFigures(); catch, end
                     lastStreamUpdate = tic;
@@ -528,6 +541,12 @@ classdef Controller < symphonyui.core.CoreObject
             end
                         
             drawnow();
+            if obj.stopEscalation >= 3
+                error('symphonyui:controller:stopTimeout', ['Acquisition did not stop after the stop request: the core ' ...
+                    'controller kept running even after its DAQ controller was stopped. The run was abandoned; the ' ...
+                    'file is intact up to the last saved epoch. Close and restart Symphony before recording again. ' ...
+                    'Details are in %s.'], fullfile(getenv('USERPROFILE'), 'streaming_debug.log'));
+            end
             if task.IsFaulted
                 % Log the actual .NET exception for diagnostics
                 fullReport = '';
@@ -587,6 +606,7 @@ classdef Controller < symphonyui.core.CoreObject
             lastStreamTic = tic;
             while obj.shouldWaitToContinuePreparingEpochs()
                 pause(0.01);
+                obj.stopWatchdog();
                 if toc(lastStreamTic) >= 0.5
                     try obj.updateStreamingFigures(); catch, end
                     lastStreamTic = tic;
@@ -605,6 +625,7 @@ classdef Controller < symphonyui.core.CoreObject
                 drawnow limitrate;
                 while obj.shouldWaitToContinuePreparingEpochs()
                     pause(0.01);
+                    obj.stopWatchdog();
                     if toc(lastStreamTic) >= 0.5
                         try obj.updateStreamingFigures(); catch, end
                         lastStreamTic = tic;
@@ -620,6 +641,115 @@ classdef Controller < symphonyui.core.CoreObject
                         end
                     end
                 end
+            end
+        end
+
+        function noteStopRequest(obj, how)
+            % Stop watchdog bookkeeping: remember when the first stop was asked
+            % for and leave a trace of the core state in streaming_debug.log.
+            if isempty(obj.stopRequestedTic)
+                obj.stopRequestedTic = tic;
+            end
+            obj.logStop('%s | state %s | %s', how, char(obj.state), obj.coreStatus());
+        end
+
+        function gaveUp = stopWatchdog(obj)
+            % A stop request that the C# controller never completes used to
+            % leave the app at "running" forever (2026-10-09, ContrastResponse
+            % and StepPulseScale on Rig A). Once the grace period (20 s plus the
+            % current epoch) has passed: force the core stop and clear the
+            % queue; 10 s later stop the DAQ controller; 10 s later give up so
+            % process() returns with an error and the app goes back to Stopped.
+            gaveUp = obj.stopEscalation >= 3;
+            if gaveUp || isempty(obj.stopRequestedTic), return; end
+            try
+                elapsed = toc(obj.stopRequestedTic);
+                if elapsed < obj.stopGraceSeconds(), return; end
+                switch obj.stopEscalation
+                    case 0
+                        obj.stopEscalation = 1;
+                        obj.stopEscalationTic = tic;
+                        obj.logStop('WATCHDOG stop not completed after %.0f s; forcing core RequestStop + ClearEpochQueue | %s', elapsed, obj.coreStatus());
+                        fprintf(2, 'Stop watchdog: the run has not stopped after %.0f s; forcing the core to stop.\n', elapsed);
+                        obj.stopAfterEpoch = false;
+                        if ~obj.state.isStopping()
+                            obj.state = symphonyui.core.ControllerState.STOPPING;
+                        end
+                        try obj.cobj.RequestStop(); catch, end
+                        try obj.cobj.ClearEpochQueue(); catch, end
+                    case 1
+                        if toc(obj.stopEscalationTic) > 10
+                            obj.stopEscalation = 2;
+                            obj.stopEscalationTic = tic;
+                            obj.logStop('WATCHDOG still running; stopping the DAQ controller | %s', obj.coreStatus());
+                            fprintf(2, 'Stop watchdog: still running; stopping the DAQ controller.\n');
+                            try obj.cobj.DAQController.RequestStop(); catch, end
+                            try obj.cobj.DAQController.Stop(); catch, end
+                        end
+                    case 2
+                        if toc(obj.stopEscalationTic) > 10
+                            obj.stopEscalation = 3;
+                            obj.logStop('WATCHDOG giving up | %s', obj.coreStatus());
+                            fprintf(2, 'Stop watchdog: giving up; the run is abandoned.\n');
+                            gaveUp = true;
+                        end
+                end
+            catch ex
+                fprintf(2, 'Stop watchdog error: %s\n', ex.message);
+            end
+        end
+
+        function g = stopGraceSeconds(obj)
+            g = 20;
+            try
+                ce = obj.cobj.CurrentEpoch;
+                if ~isempty(ce)
+                    g = g + double(ce.Duration.TotalSeconds);
+                end
+            catch
+            end
+        end
+
+        function s = coreStatus(obj)
+            s = '';
+            try
+                c = obj.cobj;
+                ceTxt = 'none';
+                ce = c.CurrentEpoch;
+                if ~isempty(ce)
+                    try
+                        ceTxt = sprintf('complete=%d duration=%.1fs', ce.IsComplete, double(ce.Duration.TotalSeconds));
+                    catch
+                        ceTxt = 'present';
+                    end
+                end
+                qd = 'n/a';
+                try
+                    cdur = c.EpochQueueDuration;
+                    if cdur.IsNone(), qd = 'none'; else, qd = sprintf('%.1fs', double(cdur.Item2.TotalSeconds)); end
+                catch
+                end
+                sw = 'none';
+                try, if ~isempty(c.StreamingWriter), sw = sprintf('active=%d', c.StreamingWriter.IsActive); end, catch, end
+                daq = 'n/a';
+                try, daq = sprintf('running=%d', c.DAQController.IsRunning); catch, end
+                nInc = 'n/a';
+                try, nInc = sprintf('%d', c.IncompleteEpochs.Length); catch, end
+                s = sprintf('core running=%d epoch[%s] queue=%s incomplete=%s streaming[%s] daq[%s]', ...
+                    c.IsRunning, ceTxt, qd, nInc, sw, daq);
+            catch ex
+                s = ['status unavailable: ' ex.message];
+            end
+        end
+
+        function logStop(~, varargin)
+            try
+                fid = fopen(fullfile(getenv('USERPROFILE'), 'streaming_debug.log'), 'a');
+                if fid > 0
+                    fprintf(fid, '%s | stop | %s\n', datestr(now), sprintf(varargin{:}));
+                    fclose(fid);
+                end
+            catch
             end
         end
 
