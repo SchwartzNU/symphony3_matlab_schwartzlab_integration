@@ -225,6 +225,7 @@ classdef SymphonyDataManager < handle
                 % (full rebuild is too slow for large files)
                 try
                     obj.refresh(false);
+                    obj.resolvePendingBlocks();
                 catch
                 end
             end
@@ -1779,6 +1780,9 @@ classdef SymphonyDataManager < handle
             epochs = obj.awaitTaskWithResult(obj.host.GetEpochsForBlockAsync(blockId));
             nEpochs = SymphonyAppUtil.getNetCount(epochs);
             obj.removeBlockPlaceholder(node);
+            if nEpochs == 0
+                obj.markBlockEmpty(node);
+            end
             for j = 1:nEpochs
                 ep = SymphonyAppUtil.getNetItem(epochs, j);
                 en = uitreenode(node, 'Text', char(ep.DisplayName), ...
@@ -1791,14 +1795,80 @@ classdef SymphonyDataManager < handle
             end
         end
 
-        function addBlockPlaceholder(~, blockNode)
+        function addBlockPlaceholder(obj, blockNode)
             % uitree only draws the expand arrow for nodes that have children,
             % so a block whose epochs are not loaded yet looked like a leaf.
-            % Give it a placeholder child (removed when the epochs load).
+            % Ask the host how many epochs the block has (one group listing):
+            % none -> the block is marked "(no epochs)" and stays a leaf so it
+            % can be found and deleted; otherwise a placeholder child gives the
+            % node its arrow until the epochs load. While a run is recording
+            % the host is not read: the block is marked pending and resolved
+            % when the run ends (resolvePendingBlocks). Display only.
             try
-                if isempty(blockNode.Children)
-                    ph = uitreenode(blockNode, 'Text', 'loading epochs...');
-                    ph.NodeData = struct('kind', 'placeholder', 'id', '');
+                if ~isempty(blockNode.Children), return; end
+                nd = blockNode.NodeData;
+                if obj.acquisitionMode
+                    n = -1;
+                else
+                    n = obj.countBlockEpochs(char(string(nd.id)));
+                end
+                if n == 0
+                    obj.markBlockEmpty(blockNode);
+                    return;
+                end
+                nd.pending = (n < 0);
+                blockNode.NodeData = nd;
+                ph = uitreenode(blockNode, 'Text', 'loading epochs...');
+                ph.NodeData = struct('kind', 'placeholder', 'id', '');
+            catch
+            end
+        end
+
+        function n = countBlockEpochs(obj, blockId)
+            % Number of epochs the host reports for a block; -1 when unknown.
+            n = -1;
+            try
+                epochs = obj.awaitTaskWithResult(obj.host.GetEpochsForBlockAsync(blockId));
+                n = SymphonyAppUtil.getNetCount(epochs);
+            catch
+            end
+        end
+
+        function markBlockEmpty(obj, blockNode)
+            % A block without epochs (a run that failed before its first epoch
+            % was saved, or whose epochs were deleted): no arrow, and labelled
+            % so it can be found and deleted from its context menu.
+            obj.removeBlockPlaceholder(blockNode);
+            nd = blockNode.NodeData;
+            nd.pending = false;
+            nd.empty = true;
+            blockNode.NodeData = nd;
+            t = char(blockNode.Text);
+            if ~endsWith(t, '(no epochs)')
+                blockNode.Text = [t '  (no epochs)'];
+            end
+        end
+
+        function resolvePendingBlocks(obj)
+            % Blocks added while a run was recording: now that the host can be
+            % read again, find out whether they have epochs.
+            try
+                stack = num2cell(obj.tree.Children);
+                while ~isempty(stack)
+                    n = stack{end};
+                    stack(end) = [];
+                    nd = n.NodeData;
+                    if isstruct(nd) && isfield(nd, 'kind') && strcmp(char(string(nd.kind)), 'epoch_block') ...
+                            && isfield(nd, 'pending') && nd.pending
+                        c = obj.countBlockEpochs(char(string(nd.id)));
+                        if c == 0
+                            obj.markBlockEmpty(n);
+                        elseif c > 0
+                            nd.pending = false;
+                            n.NodeData = nd;
+                        end
+                    end
+                    stack = [stack, num2cell(n.Children)]; %#ok<AGROW>
                 end
             catch
             end
