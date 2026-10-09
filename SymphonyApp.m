@@ -1634,9 +1634,7 @@ classdef SymphonyApp < matlab.apps.AppBase
                 st = evalc('dbstack(''-completenames'')');
                 fid = fopen(fullfile(getenv('USERPROFILE'), 'streaming_debug.log'), 'a');
                 if fid > 0
-                    fprintf(fid, '%s | %s pressed | state %s
-%s
-', datestr(now), which, char(app.controller.state), st);
+                    fprintf(fid, '%s | %s pressed | state %s\n%s\n', datestr(now), which, char(app.controller.state), st);
                     fclose(fid);
                 end
             catch
