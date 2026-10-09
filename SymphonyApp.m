@@ -658,6 +658,22 @@ classdef SymphonyApp < matlab.apps.AppBase
 
         function configureInitializeRigSelected(app, ~)
             try
+                % Re-initializing inside a running session means closing the previous
+                % rig's native devices (LightCrafter USB library, NI-DAQmx, MultiClamp
+                % telegraph) and opening them again in the same process. On 2026-10-09
+                % that killed MATLAB with a heap-corruption fault right after the old
+                % LightCrafter connection was closed. Prefer a fresh MATLAB.
+                if ~isempty(app.currentRig)
+                    choice = uiconfirm(app.UIFigure, ...
+                        ['A rig is already initialized in this session. Re-initializing in the ' ...
+                         'same MATLAB process has crashed MATLAB (native device libraries are ' ...
+                         'closed and reopened in place). Close Symphony and start it again instead.'], ...
+                        'Initialize Rig', 'Options', {'Cancel', 'Re-initialize anyway'}, ...
+                        'DefaultOption', 1, 'CancelOption', 1, 'Icon', 'warning');
+                    if ~strcmp(choice, 'Re-initialize anyway')
+                        return;
+                    end
+                end
                 % Close the previous rig BEFORE creating the new one.
                 % MultiClampDevice.Dispose() releases the COM telegraph
                 % connection to MultiClamp Commander. If we don't close
