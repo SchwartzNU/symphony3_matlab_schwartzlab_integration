@@ -1626,8 +1626,26 @@ classdef SymphonyApp < matlab.apps.AppBase
             % But once the blocking runProtocol returns, we refresh.
         end
 
+        function logStopPress(app, which)
+            % Diagnostics for runs that do not stop (2026-10-09): record where the
+            % controller loop was interrupted by the button press. A callback that
+            % interrupts pause/drawnow sees the interrupted frames in dbstack.
+            try
+                st = evalc('dbstack(''-completenames'')');
+                fid = fopen(fullfile(getenv('USERPROFILE'), 'streaming_debug.log'), 'a');
+                if fid > 0
+                    fprintf(fid, '%s | %s pressed | state %s
+%s
+', datestr(now), which, char(app.controller.state), st);
+                    fclose(fid);
+                end
+            catch
+            end
+        end
+
         function stopAndSaveButtonPushed(app, ~)
             try
+                app.logStopPress('Stop and Save');
                 state = app.controller.state;
                 if state.isStopped()
                     return;
@@ -1647,6 +1665,7 @@ classdef SymphonyApp < matlab.apps.AppBase
 
         function stopAndDeleteButtonPushed(app, ~)
             try
+                app.logStopPress('Stop');
                 % Check if we're actively recording to a file
                 isActive = false;
                 hasFile = false;
