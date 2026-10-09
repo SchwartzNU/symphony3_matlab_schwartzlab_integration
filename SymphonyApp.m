@@ -507,8 +507,28 @@ classdef SymphonyApp < matlab.apps.AppBase
             end
         end
 
+        function tf = runInProgress(app)
+            % True while the controller is running, pausing, paused or stopping
+            % (anything but Stopped). The epoch block of a run stays open until
+            % the C# controller has flushed its save queue, so epoch-group
+            % changes must wait for Stopped.
+            tf = false;
+            try
+                if ~isempty(app.controller)
+                    tf = ~app.controller.state.isStopped();
+                end
+            catch
+            end
+        end
+
         function documentBeginEpochGroupSelected(app, ~)
             try
+                if app.runInProgress()
+                    uialert(app.UIFigure, ['A run is in progress. Stop it (or let it finish) before changing the ' ...
+                        'epoch group: ending the group while epochs are still being saved loses them ' ...
+                        '("There is no open epoch block").'], 'Epoch Group');
+                    return;
+                end
                 hasFile = logical(app.awaitTaskWithResult(app.host.HasOpenFileAsync()));
                 if ~hasFile
                     uialert(app.UIFigure, 'Open or create a data file first.', 'Document');
@@ -531,6 +551,12 @@ classdef SymphonyApp < matlab.apps.AppBase
 
         function documentEndEpochGroupSelected(app, ~)
             try
+                if app.runInProgress()
+                    uialert(app.UIFigure, ['A run is in progress. Stop it (or let it finish) before changing the ' ...
+                        'epoch group: ending the group while epochs are still being saved loses them ' ...
+                        '("There is no open epoch block").'], 'Epoch Group');
+                    return;
+                end
                 if ~logical(app.awaitTaskWithResult(app.host.HasOpenFileAsync()))
                     uialert(app.UIFigure, 'Open or create a data file first.', 'Document');
                     return;

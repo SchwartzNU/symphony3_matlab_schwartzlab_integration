@@ -3648,6 +3648,11 @@ classdef SymphonyDataManager < handle
 
         function beginEpochGroup(obj)
             try
+                if obj.acquisitionMode
+                    uialert(obj.fig, ['A run is in progress. Stop it (or let it finish) before changing the ' ...
+                        'epoch group: ending the group while epochs are still being saved loses them.'], 'Epoch Group');
+                    return;
+                end
                 % Build search paths the same way as SymphonyApp.getSearchPaths
                 sp = symphonyui.ui.SymphonyDataManager.buildSearchPaths();
                 result = symphonyui.ui.BeginEpochGroupDialog.showBlocking(obj.fig, obj.host, sp);
@@ -3663,6 +3668,11 @@ classdef SymphonyDataManager < handle
 
         function endEpochGroup(obj)
             try
+                if obj.acquisitionMode
+                    uialert(obj.fig, ['A run is in progress. Stop it (or let it finish) before changing the ' ...
+                        'epoch group: ending the group while epochs are still being saved loses them.'], 'Epoch Group');
+                    return;
+                end
                 obj.awaitTask(obj.host.EndEpochGroupAsync());
                 % Commit everything to disk (see symphonyui.ui.FileCheckpoint);
                 % SymphonyApp.getFilePersistor re-validates its wrapper.
