@@ -499,6 +499,7 @@ classdef SymphonyApp < matlab.apps.AppBase
                 if isempty(result)
                     return;
                 end
+                app.checkpointFile('source');   % flush the new source to disk
                 app.refreshDataManagerView();
                 app.refreshAcquireControls();
             catch ex
@@ -519,6 +520,7 @@ classdef SymphonyApp < matlab.apps.AppBase
                 if isempty(result)
                     return;
                 end
+                app.checkpointFile('epochGroup');   % flush the new group to disk
                 app.refreshDataManagerView();  % full rebuild to show new epoch group
                 app.hasOpenEpochGroup(true);   % force cache refresh
                 app.refreshAcquireControls();

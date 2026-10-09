@@ -3535,6 +3535,12 @@ classdef SymphonyDataManager < handle
         end
 
         function notifyAcquireRefresh(obj)
+            % Called after every host mutation made from here (add source,
+            % begin/end epoch group, ...): commit it to disk first.
+            try
+                symphonyui.ui.FileCheckpoint.flush(obj.host, 'mutation');
+            catch
+            end
             if ~isempty(obj.onAfterHostMutation)
                 obj.onAfterHostMutation();
             end

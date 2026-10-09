@@ -593,6 +593,12 @@ classdef Controller < symphonyui.core.CoreObject
                     drawnow limitrate;
                 end
             end
+            % While recording, flush the HDF5 file every few seconds so a crash
+            % mid-run loses at most the last few seconds of epochs
+            % (symphonyui.ui.FileCheckpoint.flushPersistor; it takes the
+            % persistor's HDF5 lock, so it never races the writer thread).
+            lastFlushTic = tic;
+            flushEvery = 5;
             while obj.shouldContinuePreparingEpochs()
                 obj.enqueueEpoch(obj.nextEpoch());
                 obj.enqueueEpoch(obj.nextInterval());
@@ -603,6 +609,15 @@ classdef Controller < symphonyui.core.CoreObject
                         try obj.updateStreamingFigures(); catch, end
                         lastStreamTic = tic;
                         drawnow limitrate;
+                    end
+                    if ~isempty(obj.currentPersistor) && toc(lastFlushTic) >= flushEvery
+                        lastFlushTic = tic;
+                        if strcmp(symphonyui.ui.FileCheckpoint.getMode(), 'flush')
+                            try
+                                symphonyui.ui.FileCheckpoint.flushPersistor(obj.currentPersistor.cobj, 'periodic');
+                            catch
+                            end
+                        end
                     end
                 end
             end
