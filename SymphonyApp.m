@@ -36,6 +36,7 @@ classdef SymphonyApp < matlab.apps.AppBase
         helpDocumentationMenu matlab.ui.container.Menu
         helpUserGroupMenu matlab.ui.container.Menu
         helpAboutMenu matlab.ui.container.Menu
+        helpCodeStatusMenu  matlab.ui.container.Menu
 
         ProtocolDropDownLabel matlab.ui.control.Label
         protocolPopupMenu matlab.ui.control.DropDown
@@ -53,6 +54,7 @@ classdef SymphonyApp < matlab.apps.AppBase
     end
 
     properties (Access = private)
+        codeStatus = []          % symphonyui.app.CodeStatus.check() result (git state vs GitHub)
         % .NET host and lookup/cache state
         host
         protocolIdsByDisplayName
@@ -102,6 +104,10 @@ classdef SymphonyApp < matlab.apps.AppBase
 
             % Restore window position from previous session
             symphonyui.ui.ViewSettings.installAutoSave(app.UIFigure, 'SymphonyApp');
+
+            % Is the code current with GitHub? Opening old data is always allowed; a
+            % NEW experiment is refused while any repository is behind its origin.
+            app.checkCodeStatus(true);
 
             % Show Initialize Rig dialog at startup (like the old Symphony)
             drawnow;  % ensure the main figure is rendered first
@@ -362,12 +368,16 @@ classdef SymphonyApp < matlab.apps.AppBase
 
         function fileNewSelected(app, ~)
             try
+                if ~app.codeAllowsNewExperiment()
+                    return;
+                end
                 result = symphonyui.ui.NewFileDialog.showBlocking(app.UIFigure, app.host, app.getSearchPaths());
                 if isempty(result)
                     return;
                 end
                 app.showDataManager('Created');
                 app.persistRigDeviceResources();
+                app.persistCodeVersions();
                 % Pass experiment description ID to the Data Manager so it
                 % can populate the Properties tab from the MATLAB description.
                 if isstruct(result) && isfield(result, 'experimentDescriptionId') ...
@@ -2016,6 +2026,8 @@ classdef SymphonyApp < matlab.apps.AppBase
                 'MenuSelectedFcn', createCallbackFcn(app, @helpDocumentationSelected, true));
             app.helpUserGroupMenu = uimenu(app.HelpMenu, 'Text', 'User Group', ...
                 'MenuSelectedFcn', createCallbackFcn(app, @helpUserGroupSelected, true));
+            app.helpCodeStatusMenu = uimenu(app.HelpMenu, 'Text', 'Code Status (GitHub)...', ...
+                'MenuSelectedFcn', createCallbackFcn(app, @helpCodeStatusSelected, true));
             app.helpAboutMenu = uimenu(app.HelpMenu, 'Text', 'About SymphonyApp', 'Separator', 'on', ...
                 'MenuSelectedFcn', createCallbackFcn(app, @helpAboutSelected, true));
 
@@ -2108,6 +2120,129 @@ classdef SymphonyApp < matlab.apps.AppBase
         % These expose the same code paths as the UI controls so extension
         % modules (e.g. sa_labs.modules.ReceptiveFieldMapper) can drive
         % acquisition exactly as a user would.
+
+        function checkCodeStatus(app, atStartup)
+            % Fetch origin for the Symphony fork, the extension and the Stage
+            % testbed (plus the Stage PC's copies through its watchdog) and
+            % keep the result. Prints a summary; at startup also warns when a
+            % new experiment would be refused.
+            if nargin < 2, atStartup = false; end
+            dlg = [];
+            try
+                dlg = uiprogressdlg(app.UIFigure, 'Title', 'Code status', ...
+                    'Message', 'Checking the acquisition code against GitHub...', 'Indeterminate', 'on');
+            catch
+            end
+            try
+                app.codeStatus = symphonyui.app.CodeStatus.check(true);
+                fprintf('Code status:\n%s\n', symphonyui.app.CodeStatus.summary(app.codeStatus));
+            catch ex
+                fprintf(2, 'Code status check failed: %s\n', ex.message);
+                app.codeStatus = [];
+            end
+            try, if ~isempty(dlg), close(dlg); end, catch, end
+            if atStartup && ~isempty(app.codeStatus)
+                reasons = symphonyui.app.CodeStatus.blocking(app.codeStatus);
+                if ~isempty(reasons)
+                    uialert(app.UIFigure, sprintf(['The acquisition code is out of date:\n\n%s\n\n' ...
+                        'Opening existing data files works; a new experiment is refused until the code is ' ...
+                        'updated (git pull in each repository, then restart Symphony).'], strjoin(reasons, newline)), ...
+                        'Code out of date', 'Icon', 'warning');
+                end
+            end
+        end
+
+        function tf = codeAllowsNewExperiment(app)
+            % Refuse a new experiment while any repository is behind GitHub (or
+            % the Stage PC runs other commits). Uncommitted or unpushed changes
+            % and an unreachable GitHub only ask for confirmation; the state is
+            % written into the file either way.
+            tf = false;
+            while true
+                if isempty(app.codeStatus)
+                    app.checkCodeStatus(false);
+                end
+                if isempty(app.codeStatus)
+                    choice = uiconfirm(app.UIFigure, ['The code could not be checked against GitHub ' ...
+                        '(see the command window). Start the experiment anyway?'], 'Code status', ...
+                        'Options', {'Start anyway', 'Check again', 'Cancel'}, 'DefaultOption', 2, 'CancelOption', 3, 'Icon', 'warning');
+                    switch choice
+                        case 'Start anyway', tf = true; return;
+                        case 'Check again', app.codeStatus = []; continue;
+                        otherwise, return;
+                    end
+                end
+                blocking = symphonyui.app.CodeStatus.blocking(app.codeStatus);
+                if ~isempty(blocking)
+                    choice = uiconfirm(app.UIFigure, sprintf(['The acquisition code is out of date; a new experiment ' ...
+                        'cannot be started with it:\n\n%s\n\nUpdate the code (git pull), restart Symphony, ' ...
+                        'or check again after updating.'], strjoin(blocking, newline)), 'Code out of date', ...
+                        'Options', {'Check again', 'Cancel'}, 'DefaultOption', 1, 'CancelOption', 2, 'Icon', 'error');
+                    if strcmp(choice, 'Check again')
+                        app.codeStatus = [];
+                        continue;
+                    end
+                    return;
+                end
+                warnings = symphonyui.app.CodeStatus.warnings(app.codeStatus);
+                if ~isempty(warnings)
+                    choice = uiconfirm(app.UIFigure, sprintf(['The code is not exactly what is on GitHub:\n\n%s\n\n' ...
+                        'These versions will be recorded in the data file. Start the experiment?'], ...
+                        strjoin(warnings, newline)), 'Code status', ...
+                        'Options', {'Start', 'Check again', 'Cancel'}, 'DefaultOption', 1, 'CancelOption', 3, 'Icon', 'warning');
+                    switch choice
+                        case 'Start', tf = true; return;
+                        case 'Check again', app.codeStatus = []; continue;
+                        otherwise, return;
+                    end
+                end
+                tf = true;
+                return;
+            end
+        end
+
+        function persistCodeVersions(app)
+            % Write the repository versions into the new file as experiment
+            % properties (codeVersion_<repo> = 'branch@commit ahead=n dirty=d');
+            % the DataJoint importer stores them in sln_symphony.ExperimentCodeVersion.
+            if isempty(app.codeStatus)
+                return;
+            end
+            try
+                cper = app.host.GetPersistor();
+                if isempty(cper), return; end
+                factory = symphonyui.core.persistent.EntityFactory();
+                pExp = factory.create(cper.Experiment);
+                m = symphonyui.app.CodeStatus.fileProperties(app.codeStatus);
+                keys = m.keys;
+                for i = 1:numel(keys)
+                    pExp.setProperty(keys{i}, m(keys{i}));
+                end
+                symphonyui.ui.FileCheckpoint.flush(app.host, 'codeVersions');
+                fprintf('Code versions written to the data file (%d properties).\n', numel(keys));
+            catch ex
+                fprintf(2, 'Could not write the code versions into the data file: %s\n', ex.message);
+            end
+        end
+
+        function helpCodeStatusSelected(app, ~)
+            app.checkCodeStatus(false);
+            if isempty(app.codeStatus)
+                uialert(app.UIFigure, 'The code could not be checked; see the command window.', 'Code status');
+                return;
+            end
+            msg = symphonyui.app.CodeStatus.summary(app.codeStatus);
+            blocking = symphonyui.app.CodeStatus.blocking(app.codeStatus);
+            warnings = symphonyui.app.CodeStatus.warnings(app.codeStatus);
+            if ~isempty(blocking)
+                msg = sprintf('%s\n\nNew experiments are refused:\n%s', msg, strjoin(blocking, newline));
+            elseif ~isempty(warnings)
+                msg = sprintf('%s\n\nNotes:\n%s', msg, strjoin(warnings, newline));
+            else
+                msg = sprintf('%s\n\nEverything matches GitHub.', msg);
+            end
+            uialert(app.UIFigure, msg, 'Code status', 'Icon', 'info');
+        end
 
         function persistRigDeviceResources(app)
             % Copy every rig device's resources (calibration tables, LightCrafter
