@@ -163,17 +163,17 @@ classdef SymphonyDataManager < handle
                     if strcmp(key, '__experimentDescriptionId')
                         descId = char(val);
                     else
-                        % Store value for later populating the controls
+                        % Store value for later populating the controls: numbers
+                        % from Measurements, text for everything else (vectors as
+                        % '12 34'; char(string()) threw on .NET arrays).
                         try
-                            if isa(val, 'System.String')
-                                propMap(key) = char(val);
-                            elseif isa(val, 'Symphony.Core.Measurement')
-                                propMap(key) = double(val.Quantity);
+                            v = symphonyui.ui.SymphonyDataManager.netPropertyValue(val);
+                            if isa(val, 'Symphony.Core.Measurement')
+                                propMap(key) = v;
                             else
-                                propMap(key) = char(string(val));
+                                propMap(key) = symphonyui.ui.SymphonyDataManager.propertyValueText(v);
                             end
                         catch
-                            propMap(key) = char(string(val));
                         end
                     end
                 end
@@ -2126,8 +2126,8 @@ classdef SymphonyDataManager < handle
 
                     valStr = '';
                     if ~isempty(d.value)
-                        if isnumeric(d.value)
-                            valStr = num2str(d.value);
+                        if isnumeric(d.value) || islogical(d.value)
+                            valStr = symphonyui.ui.SymphonyDataManager.propertyValueText(d.value);
                         else
                             valStr = char(string(d.value));
                         end
@@ -2232,25 +2232,13 @@ classdef SymphonyDataManager < handle
                             catch
                             end
 
-                            % Read property values
-                            try
-                                propEnum = csrc.Properties.GetEnumerator();
-                                while propEnum.MoveNext()
-                                    kv = propEnum.Current;
-                                    key = char(kv.Key);
-                                    val = kv.Value;
-                                    try
-                                        if isa(val, 'System.String')
-                                            propMap(key) = char(val);
-                                        else
-                                            propMap(key) = char(string(val));
-                                        end
-                                    catch
-                                        propMap(key) = char(string(val));
-                                    end
-                                end
-                            catch
-                            end
+                            % Read property values as MATLAB values (uint8 number,
+                            % double location, ...). char(string(...)) on a .NET
+                            % Double[] (a Cell's location) threw and aborted this
+                            % loop, so every property after it (number, type) fell
+                            % back to the description default: saved values looked
+                            % lost (2026-10-20). Each property is now read on its own.
+                            propMap = symphonyui.ui.SymphonyDataManager.readPropertyValues(csrc.Properties);
                             break;
                         end
                     end
@@ -2356,8 +2344,10 @@ classdef SymphonyDataManager < handle
                     if iscell(d.value)
                         % Multi-select: value is a cell array of strings
                         selectedValues = cellfun(@(x) char(string(x)), d.value, 'UniformOutput', false);
-                    elseif isnumeric(d.value)
-                        valStr = num2str(d.value);
+                    elseif isnumeric(d.value) || islogical(d.value)
+                        % '12 34' for a location vector (num2str of a column
+                        % gave a multi-row char the edit field rejects)
+                        valStr = symphonyui.ui.SymphonyDataManager.propertyValueText(d.value);
                     else
                         valStr = char(string(d.value));
                     end
@@ -2787,7 +2777,8 @@ classdef SymphonyDataManager < handle
                     for pi = 0:nProps-1
                         kvp = propList.Item(pi);
                         pKey = char(kvp.Key);
-                        pVal = char(string(kvp.Value));
+                        pVal = symphonyui.ui.SymphonyDataManager.propertyValueText( ...
+                            symphonyui.ui.SymphonyDataManager.netPropertyValue(kvp.Value));
                         if strcmp(pKey, '__epochGroupDescriptionId')
                             descId = pVal;
                         elseif ~startsWith(pKey, '__')
@@ -3723,6 +3714,87 @@ classdef SymphonyDataManager < handle
     end
 
     methods (Static)
+        function m = readPropertyValues(netProperties)
+            % Property dictionary of a .NET entity -> containers.Map of MATLAB
+            % values. Each property is converted on its own, so one value that
+            % cannot be converted is skipped instead of losing all the rest.
+            m = containers.Map();
+            try
+                e = netProperties.GetEnumerator();
+            catch
+                return;
+            end
+            while e.MoveNext()
+                try
+                    kv = e.Current;
+                    m(char(kv.Key)) = symphonyui.ui.SymphonyDataManager.netPropertyValue(kv.Value);
+                catch ex
+                    fprintf(2, 'Data Manager: could not read a property value: %s\n', ex.message);
+                end
+            end
+        end
+
+        function v = netPropertyValue(val)
+            % One stored property value -> a MATLAB value: char for text, numeric
+            % row vector for numeric arrays (System.Double[] etc.), double for a
+            % Measurement, logical/numeric scalars as MATLAB already converted
+            % them, cellstr for string arrays, and JSON lists (multi-select
+            % properties) decoded to cellstr as Entity.valueFromPropertyValue does.
+            if isa(val, 'System.String')
+                v = char(val);
+                if ~isempty(regexp(v, '^\s*\[.*\]\s*$', 'once'))
+                    try
+                        j = jsondecode(v);
+                        if iscell(j) || isstring(j)
+                            v = cellstr(j(:)');
+                        elseif ischar(j)
+                            v = {j};
+                        end
+                    catch
+                    end
+                end
+            elseif isa(val, 'Symphony.Core.Measurement')
+                v = double(val.Quantity);
+            elseif isa(val, 'System.Array')
+                try
+                    v = reshape(double(val), 1, []);
+                catch
+                    c = cell(val);
+                    v = cellfun(@(x) char(x.ToString()), c(:)', 'UniformOutput', false);
+                end
+            elseif isobject(val)
+                v = char(val.ToString());
+            else
+                v = val;
+            end
+        end
+
+        function s = propertyValueText(v)
+            % Text for an edit field: '7' for a scalar, '12 34' for a vector,
+            % 'true'/'false' for a logical, items joined with '; ' for a cell.
+            if ischar(v)
+                s = v;
+            elseif isstring(v)
+                s = char(strjoin(v, ' '));
+            elseif iscell(v)
+                s = strjoin(cellfun(@(x) char(string(x)), v(:)', 'UniformOutput', false), '; ');
+            elseif islogical(v) && isscalar(v)
+                if v, s = 'true'; else, s = 'false'; end
+            elseif isnumeric(v) || islogical(v)
+                if isempty(v)
+                    s = '';
+                else
+                    s = strjoin(arrayfun(@(x) num2str(x), double(v(:)'), 'UniformOutput', false), ' ');
+                end
+            else
+                try
+                    s = char(string(v));
+                catch
+                    s = '';
+                end
+            end
+        end
+
         function stepFlush(msg)
             % Bisection aid: with setappdata(groot, 'SymphonyDMStepFlush', true)
             % do a full drawnow after each epoch-selection step and trace it.
