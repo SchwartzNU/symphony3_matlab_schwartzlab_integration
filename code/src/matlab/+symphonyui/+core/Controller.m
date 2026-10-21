@@ -134,6 +134,20 @@ classdef Controller < symphonyui.core.CoreObject
             if ~obj.state.isRunning() && ~obj.state.isPausing()
                 return;
             end
+            % Stop now instead of after the epoch when the current epoch never
+            % ends (Seal and Leak: one indefinite epoch, so "after the epoch"
+            % meant only the 20 s watchdog stopped it, 2026-10-20) or when Stop
+            % and Save is pressed again while the first press is still pending.
+            indefinite = false;
+            try
+                ce = obj.cobj.CurrentEpoch;
+                indefinite = ~isempty(ce) && logical(ce.IsIndefinite);
+            catch
+            end
+            if indefinite || obj.stopAfterEpoch
+                obj.requestStop();
+                return;
+            end
             obj.stopAfterEpoch = true;
         end
 
@@ -714,8 +728,9 @@ classdef Controller < symphonyui.core.CoreObject
             g = 20;
             try
                 ce = obj.cobj.CurrentEpoch;
-                if ~isempty(ce)
-                    g = g + double(ce.Duration.TotalSeconds);
+                if ~isempty(ce) && ~logical(ce.IsIndefinite)
+                    % at most a minute for the epoch itself
+                    g = g + min(60, double(ce.Duration.TotalSeconds));
                 end
             catch
             end
