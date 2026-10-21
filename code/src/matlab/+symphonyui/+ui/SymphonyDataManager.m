@@ -1926,6 +1926,33 @@ classdef SymphonyDataManager < handle
             end
         end
 
+        function tf = selectedGroupIsNested(obj, gid)
+            % True when the epoch group gid sits inside another epoch group:
+            % from the host state (ParentGroupId), with the tree as a fallback.
+            tf = false;
+            try
+                dm = obj.lastDm;
+                if ~isempty(dm)
+                    for i = 1:SymphonyAppUtil.getNetCount(dm.EpochGroups)
+                        g = SymphonyAppUtil.getNetItem(dm.EpochGroups, i);
+                        if strcmp(lower(strrep(char(g.Id), '-', '')), lower(strrep(gid, '-', '')))
+                            pid = g.ParentGroupId;
+                            tf = ~isempty(pid) && ~isempty(char(pid));
+                            return;
+                        end
+                    end
+                end
+            catch
+            end
+            try
+                sn = obj.tree.SelectedNodes;
+                pn = sn(1).Parent;
+                tf = isa(pn, 'matlab.ui.container.TreeNode') && isstruct(pn.NodeData) ...
+                    && isfield(pn.NodeData, 'kind') && strcmp(char(string(pn.NodeData.kind)), 'epoch_group');
+            catch
+            end
+        end
+
         function changeSourceOfNestedGroup(obj, gid, sourceId, sourceLabel)
             % Move a nested epoch group to the top level and to another source:
             % close the file, relink (symphonyui.ui.EpochGroupRelink), reopen.
@@ -1946,7 +1973,7 @@ classdef SymphonyDataManager < handle
                 return;
             end
             choice = uiconfirm(obj.fig, sprintf(['This epoch group is inside another epoch group. Its source ' ...
-                'will be changed to %s and it will be moved out to the top level.\n\nThe file is closed ' ...
+                'will be %s and it will be moved out to the top level.\n\nThe file is closed ' ...
                 'and reopened to do this; nothing is copied or rewritten.'], sourceLabel), 'Change Source', ...
                 'Options', {'Move and change source', 'Cancel'}, 'DefaultOption', 1, 'CancelOption', 2);
             if ~strcmp(choice, 'Move and change source')
@@ -1998,28 +2025,32 @@ classdef SymphonyDataManager < handle
                 end
                 initial = find(strcmp(ids, currentId), 1);
                 if isempty(initial), initial = 1; end
+                % A group inside another group must also move out to the top
+                % level (the importer cannot handle a nested group on another
+                % source, 2026-10-20); the core cannot do that with the file open.
+                nested = obj.selectedGroupIsNested(gid);
+                prompt = {'New source for this epoch group:'};
+                if nested
+                    prompt = {'This group is inside another epoch group and will be moved out', ...
+                        'to the top level. Source for it (its current one is preselected):'};
+                end
                 obj.raiseAfterRefresh = true;
-                [sel, ok] = listdlg('PromptString', {'New source for this epoch group:'}, ...
+                [sel, ok] = listdlg('PromptString', prompt, ...
                     'ListString', labels, 'SelectionMode', 'single', 'InitialValue', initial, ...
                     'Name', 'Change Source', 'ListSize', [440 260]);
-                if ~ok || isempty(sel) || strcmp(ids{sel}, currentId)
+                if ~ok || isempty(sel)
                     try, figure(obj.fig); catch, end
                     obj.raiseAfterRefresh = false;
                     return;
                 end
-                % A group inside another group must also move out to the top
-                % level (the importer cannot handle a nested group on another
-                % source, 2026-10-20); the core cannot do that with the file open.
-                nested = false;
-                try
-                    sn = obj.tree.SelectedNodes;
-                    pn = sn(1).Parent;
-                    nested = isa(pn, 'matlab.ui.container.TreeNode') && isstruct(pn.NodeData) ...
-                        && isfield(pn.NodeData, 'kind') && strcmp(char(string(pn.NodeData.kind)), 'epoch_group');
-                catch
-                end
                 if nested
+                    % also when the source stays the same: the move is the fix
                     obj.changeSourceOfNestedGroup(gid, ids{sel}, labels{sel});
+                    return;
+                end
+                if strcmp(ids{sel}, currentId)
+                    obj.raiseAfterRefresh = false;
+                    uialert(obj.fig, sprintf('This epoch group already uses %s.', labels{sel}), 'Change Source');
                     return;
                 end
                 symphonyui.ui.SymphonyDataManager.setEpochGroupSource(cper, pEG, ids{sel});
