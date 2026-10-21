@@ -71,6 +71,8 @@ classdef SymphonyDataManager < handle
         % When true, blocks all HDF5 reads (tree refresh, property display,
         % epoch plotting) to prevent concurrent access with C# writes.
         acquisitionMode logical = false
+        refreshPending logical = false       % a refresh was requested during a run
+        refreshPendingFull logical = false
         sourceLabelCache    % containers.Map source id -> tree label (Retina: label + DJID + eye)
     end
 
@@ -214,18 +216,46 @@ classdef SymphonyDataManager < handle
             end
         end
 
+        function tf = refuseWhileRecording(obj)
+            % True (and a message) while a run is active: Data Manager actions
+            % that read or write the file wait until the run has finished.
+            tf = obj.acquisitionMode;
+            if tf
+                try
+                    uialert(obj.fig, ['A run is in progress. Data Manager changes are disabled until it ' ...
+                        'finishes (Stop, then edit).'], 'Recording in progress', 'Icon', 'warning');
+                catch
+                end
+            end
+        end
+
         function setAcquisitionMode(obj, tf)
             %SETACQUISITIONMODE  Block/unblock heavy HDF5 reads during acquisition.
             %   When tf=true, full tree refresh is blocked. Tree selection
             %   and entity property display are still allowed (safe with
             %   separate HDF5 libraries).
             obj.acquisitionMode = logical(tf);
-            if ~tf && ~isempty(obj.fig) && isvalid(obj.fig)
-                % Resuming — incremental refresh to show newly recorded data
-                % (full rebuild is too slow for large files)
+            if tf && ~isempty(obj.fig) && isvalid(obj.fig)
+                % No editable fields stay on screen during a run: an edit would
+                % have to write to the file while the writer thread is using it.
                 try
-                    obj.refresh(false);
+                    obj.showCard('empty');
+                    obj.populateEntityTabsEmpty();
+                    obj.clearPropDynamicGrid();
+                catch
+                end
+                obj.updateMenuState();
+            end
+            if ~tf && ~isempty(obj.fig) && isvalid(obj.fig)
+                % Run finished: show what was recorded (incremental unless a
+                % full rebuild was asked for meanwhile)
+                full = obj.refreshPendingFull;
+                obj.refreshPending = false;
+                obj.refreshPendingFull = false;
+                try
+                    obj.refresh(full);
                     obj.resolvePendingBlocks();
+                    obj.updateMenuState();
                 catch
                 end
             end
@@ -236,9 +266,14 @@ classdef SymphonyDataManager < handle
                 return;
             end
             if nargin < 2, fullRebuild = true; end
-            % During acquisition, block full rebuilds (heavy HDF5 enumeration)
-            % but allow incremental updates using cached state.
-            if obj.acquisitionMode && fullRebuild
+            % While a run is active the Data Manager makes no host calls at all:
+            % every host read goes through the same HDF5 library as the writer,
+            % and a blocked MATLAB thread here also stops the acquisition thread,
+            % which waits for MATLAB to take its next epoch event (deadlock,
+            % 2026-10-20). The refresh happens when the run ends.
+            if obj.acquisitionMode
+                obj.refreshPending = true;
+                obj.refreshPendingFull = obj.refreshPendingFull || fullRebuild;
                 return;
             end
 
@@ -277,6 +312,11 @@ classdef SymphonyDataManager < handle
         end
 
         function updateMenuState(obj)
+            if obj.acquisitionMode
+                try, obj.menuBeginEpochGroup.Enable = 'off'; catch, end
+                try, obj.menuEndEpochGroup.Enable = 'off'; catch, end
+                return;
+            end
             %UPDATEMENUSTATE  Enable/disable menus based on current state.
             try
                 dm = obj.lastDm;
@@ -434,6 +474,7 @@ classdef SymphonyDataManager < handle
         end
 
         function onCloseRequest(obj)
+            if obj.refuseWhileRecording(), return; end
             % Confirm before closing the Data Manager and the underlying file.
             try
                 hasFile = obj.awaitTaskWithResult(obj.host.HasOpenFileAsync());
@@ -929,6 +970,7 @@ classdef SymphonyDataManager < handle
         end
 
         function onTreeMenuAddChildSource(obj)
+            if obj.refuseWhileRecording(), return; end
             nd = obj.getSelectedTreeNodeData();
             if isempty(nd) || ~strcmp(char(string(nd.kind)), 'source')
                 return;
@@ -949,6 +991,7 @@ classdef SymphonyDataManager < handle
         end
 
         function onTreeMenuDeleteEntity(obj)
+            if obj.refuseWhileRecording(), return; end
             nd = obj.getSelectedTreeNodeData();
             if isempty(nd)
                 return;
@@ -972,6 +1015,7 @@ classdef SymphonyDataManager < handle
         end
 
         function onTreeMenuSplitEpochGroup(obj)
+            if obj.refuseWhileRecording(), return; end
             try
                 nd = obj.getSelectedTreeNodeData();
                 if isempty(nd) || ~strcmp(char(string(nd.kind)), 'epoch_group')
@@ -1007,6 +1051,7 @@ classdef SymphonyDataManager < handle
         end
 
         function onTreeMenuSplitAfterThisBlock(obj)
+            if obj.refuseWhileRecording(), return; end
             nd = obj.getSelectedTreeNodeData();
             if isempty(nd) || ~strcmp(char(string(nd.kind)), 'epoch_block')
                 return;
@@ -1031,6 +1076,7 @@ classdef SymphonyDataManager < handle
         end
 
         function onTreeMenuMergeEpochGroups(obj)
+            if obj.refuseWhileRecording(), return; end
             nd = obj.getSelectedTreeNodeData();
             if isempty(nd) || ~strcmp(char(string(nd.kind)), 'epoch_group')
                 return;
@@ -1995,6 +2041,7 @@ classdef SymphonyDataManager < handle
         end
 
         function onExperimentDescPropertyChanged(obj, propName, newValue)
+            if obj.refuseWhileRecording(), return; end
             % Update the experiment description property value on the
             % MATLAB-side cached description object.
             if ~isempty(obj.experimentDescription)
@@ -2424,6 +2471,7 @@ classdef SymphonyDataManager < handle
         end
 
         function commitSourceLabelFromPropGrid(obj, sourceId, newLabel)
+            if obj.refuseWhileRecording(), return; end
             % Persist the label to the C# host
             try
                 obj.host.RenameSourceAsync(sourceId, newLabel).GetAwaiter().GetResult();
@@ -2481,6 +2529,7 @@ classdef SymphonyDataManager < handle
         end
 
         function onSourceDescPropertyChanged(obj, sourceId, propName, newValue)
+            if obj.refuseWhileRecording(), return; end
             % Persist the source property to HDF5.
             % newValue may be a char (single value) or cell array (multi-select).
             try
@@ -2503,20 +2552,33 @@ classdef SymphonyDataManager < handle
                                 % the raw text made e.g. 'number' an HDF5 string, which
                                 % the lab's DataJoint reader cannot parse.
                                 value = char(string(newValue));
+                                % Type and editability come from the source's
+                                % description class (Cell, Retina, ...), the same
+                                % descriptors the edit fields were built from. The
+                                % file's own descriptor can be a read-only, typeless
+                                % stand-in when the stored descriptor resource is
+                                % missing; then 'location' could not be saved at all
+                                % ("location is read only", 2026-10-20).
+                                [pt, classReadOnly, fileDescOk] = ...
+                                    symphonyui.ui.SymphonyDataManager.sourcePropertyType(pSrc, propName);
+                                if classReadOnly
+                                    fprintf(2, 'Property "%s" is read only.\n', propName);
+                                    break;
+                                end
                                 try
-                                    d = pSrc.getPropertyDescriptors().findByName(propName);
-                                    if isempty(d)
-                                        error('no descriptor for %s', propName);
-                                    end
-                                    pt = char(d.type.primitiveType);
-                                    if ~any(strcmp(pt, {'char', 'cellstr', 'string'}))
+                                    if ~isempty(pt) && ~any(strcmp(pt, {'char', 'cellstr', 'string'}))
                                         value = SymphonyAppUtil.coerceValue(value, pt);
                                     end
                                 catch coerceEx
                                     fprintf(2, 'Property "%s": could not coerce "%s" to its declared type (%s); storing as text.\n', ...
                                         propName, char(string(newValue)), coerceEx.message);
                                 end
-                                pSrc.setProperty(propName, value);
+                                if fileDescOk
+                                    pSrc.setProperty(propName, value);
+                                else
+                                    % no usable stored descriptor: write the value itself
+                                    src.AddProperty(propName, value);
+                                end
                             end
                             break;
                         end
@@ -2528,6 +2590,7 @@ classdef SymphonyDataManager < handle
         end
 
         function openMultiSelectDialog(obj, btn, sourceId, propName, domainItems, currentSelection)
+            if obj.refuseWhileRecording(), return; end
             %OPENMULTISELECTDIALOG  Checkbox dialog for cellstr multi-select properties.
             %   Selected items are joined with '; ' and displayed on the button.
             try
@@ -2575,6 +2638,7 @@ classdef SymphonyDataManager < handle
         end
 
         function openTreeSelectDialog(obj, btn, sourceId, propName, mapDomain, currentValue)
+            if obj.refuseWhileRecording(), return; end
             %OPENTREESELECTDIALOG  Hierarchical tree dialog for containers.Map domain.
             %   The map keys are top-level categories; values are cell arrays of sub-items.
             %   Selected path is joined with '\' (e.g. 'RGC\ON-parasol').
@@ -3022,6 +3086,7 @@ classdef SymphonyDataManager < handle
         end
 
         function commitEpochGroupLabelFromPropGrid(obj, groupId, newLabel)
+            if obj.refuseWhileRecording(), return; end
             % Update HDF5 directly
             try
                 cper = obj.host.GetPersistor();
@@ -3058,6 +3123,7 @@ classdef SymphonyDataManager < handle
         end
 
         function onEpochGroupDescPropertyChanged(obj, groupId, propName, newValue)
+            if obj.refuseWhileRecording(), return; end
             %ONEPOCHGROUPDESCPROPERTYCHANGED  Persist a changed epoch group property to HDF5.
             try
                 cper = obj.host.GetPersistor();
@@ -3572,6 +3638,7 @@ classdef SymphonyDataManager < handle
         end
 
         function commitExperimentPurpose(obj)
+            if obj.refuseWhileRecording(), return; end
             try
                 obj.awaitTask(obj.host.SetExperimentPurposeAsync(obj.expPurposeField.Value));
                 obj.notifyAcquireRefresh();
@@ -3582,6 +3649,7 @@ classdef SymphonyDataManager < handle
         end
 
         function commitSourceLabel(obj)
+            if obj.refuseWhileRecording(), return; end
             try
                 id = obj.currentSelection.id;
                 obj.awaitTask(obj.host.SetSourceLabelAsync(id, obj.srcLabelField.Value));
@@ -3593,6 +3661,7 @@ classdef SymphonyDataManager < handle
         end
 
         function commitEpochGroupLabel(obj)
+            if obj.refuseWhileRecording(), return; end
             try
                 id = obj.currentSelection.id;
                 obj.awaitTask(obj.host.SetEpochGroupLabelAsync(id, obj.grpLabelField.Value));
@@ -3608,6 +3677,7 @@ classdef SymphonyDataManager < handle
         end
 
         function addSource(obj)
+            if obj.refuseWhileRecording(), return; end
             try
                 sp = symphonyui.ui.SymphonyDataManager.buildSearchPaths();
 
@@ -3714,6 +3784,42 @@ classdef SymphonyDataManager < handle
     end
 
     methods (Static)
+        function [pt, readOnly, fileDescOk] = sourcePropertyType(pSrc, propName)
+            % Declared primitive type ('uint8', 'denserealdouble', 'char', ...)
+            % and read-only flag of a source property, taken from the source's
+            % description class; the stored descriptor is only a fallback.
+            % fileDescOk: the file holds a real descriptor for it (typed, from
+            % the descriptor resource), so Entity.setProperty can be used.
+            pt = '';
+            readOnly = false;
+            fileDescOk = false;
+            d = [];
+            try
+                d = pSrc.getPropertyDescriptors().findByName(propName);
+                fileDescOk = ~isempty(d) && isa(d.type, 'symphonyui.core.PropertyType') && ~d.isReadOnly;
+            catch
+            end
+            dc = [];
+            try
+                ctor = str2func(pSrc.getDescriptionType());
+                dc = ctor().getPropertyDescriptors().findByName(propName);
+            catch
+            end
+            if ~isempty(dc)
+                readOnly = dc.isReadOnly;
+                if isa(dc.type, 'symphonyui.core.PropertyType')
+                    pt = char(dc.type.primitiveType);
+                end
+            end
+            if isempty(pt) && ~isempty(d) && isa(d.type, 'symphonyui.core.PropertyType')
+                pt = char(d.type.primitiveType);
+            end
+            if isempty(pt) && ~isempty(d)
+                % last resort: the class of the value already stored
+                pt = symphonyui.core.PropertyType.primitiveTypeOf(d.value);
+            end
+        end
+
         function m = readPropertyValues(netProperties)
             % Property dictionary of a .NET entity -> containers.Map of MATLAB
             % values. Each property is converted on its own, so one value that

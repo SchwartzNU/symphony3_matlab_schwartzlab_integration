@@ -451,6 +451,10 @@ classdef SymphonyApp < matlab.apps.AppBase
         end
 
         function refreshDataManagerView(app, fullRebuild)
+            if app.isAcquiring
+                % the Data Manager refreshes itself when the run ends
+                return;
+            end
             if nargin < 2, fullRebuild = true; end
             % During acquisition, skip full rebuilds but allow incremental
             % updates. With separate HDF5 libraries (hdf5_symphony.dll),

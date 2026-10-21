@@ -59,6 +59,7 @@ classdef Controller < symphonyui.core.CoreObject
                 return;
             end
 
+            symphonyui.core.ActivityLog.mark('run start: %s (%s)', class(protocol), char(string(isempty(persistor))));
             try
                 obj.prepareRun(protocol, persistor);
                 obj.run();
@@ -404,6 +405,7 @@ classdef Controller < symphonyui.core.CoreObject
             listeners(end + 1) = NetListener(obj.cobj, 'CompletedEpoch', 'Symphony.Core.TimeStampedEpochEventArgs', @(h,d)onCompletedEpoch(obj,h,d));
             function onCompletedEpoch(obj, ~, event)
                 epoch = symphonyui.core.Epoch(event.Epoch);
+                symphonyui.core.ActivityLog.mark('completed epoch callback start (completed so far %d)', obj.currentProtocol.numEpochsCompleted);
                 try
                     if epoch.isInterval()
                         obj.currentProtocol.completeInterval(epoch);
@@ -434,6 +436,7 @@ classdef Controller < symphonyui.core.CoreObject
                         end
                     end
                 end
+                symphonyui.core.ActivityLog.mark('completed epoch callback done');
                 if obj.stopAfterEpoch || ~obj.currentProtocol.shouldContinueRun()
                     obj.stopAfterEpoch = false;
                     obj.requestStop();
@@ -525,9 +528,13 @@ classdef Controller < symphonyui.core.CoreObject
                     end
                 end
             end
-            if obj.stopEscalation < 3
+            if obj.stopEscalation == 0
+                % Task.WaitAll blocks the MATLAB thread with no timeout; after a
+                % forced stop some epoch tasks never complete, so skip it then.
+                symphonyui.core.ActivityLog.mark('run: waiting for epoch tasks');
                 obj.tryCore(@()obj.cobj.WaitForCompletedEpochTasks());
             end
+            symphonyui.core.ActivityLog.mark('run: waiting for the core task');
 
             while ~task.IsCompleted
                 pause(0.01);
@@ -582,6 +589,11 @@ classdef Controller < symphonyui.core.CoreObject
                             rethrow(rethrowEx);
                         end
                     end
+                elseif contains(report, 'Sample units must be in')
+                    error('symphonyui:controller:ampModeMismatch', ['%s\n\nThe stimulus units do not match the amplifier mode: ' ...
+                        'the MultiClamp was switched between voltage and current clamp during the run, or the ' ...
+                        'protocol was started in the other mode. Stop the run before switching the amplifier mode, ' ...
+                        'then start it again.'], report);
                 else
                     error('symphonyui:controller:taskFaulted', '%s', report);
                 end
@@ -669,14 +681,13 @@ classdef Controller < symphonyui.core.CoreObject
                     case 0
                         obj.stopEscalation = 1;
                         obj.stopEscalationTic = tic;
-                        obj.logStop('WATCHDOG stop not completed after %.0f s; forcing core RequestStop + ClearEpochQueue | %s', elapsed, obj.coreStatus());
+                        obj.logStop('WATCHDOG stop not completed after %.0f s; forcing core RequestStop | %s', elapsed, obj.coreStatus());
                         fprintf(2, 'Stop watchdog: the run has not stopped after %.0f s; forcing the core to stop.\n', elapsed);
                         obj.stopAfterEpoch = false;
                         if ~obj.state.isStopping()
                             obj.state = symphonyui.core.ControllerState.STOPPING;
                         end
                         try obj.cobj.RequestStop(); catch, end
-                        try obj.cobj.ClearEpochQueue(); catch, end
                     case 1
                         if toc(obj.stopEscalationTic) > 10
                             obj.stopEscalation = 2;
@@ -793,6 +804,7 @@ classdef Controller < symphonyui.core.CoreObject
 
         function e = nextEpoch(obj)
             e = symphonyui.core.Epoch(class(obj.currentProtocol));
+            symphonyui.core.ActivityLog.mark('prepareEpoch %d start', obj.currentProtocol.numEpochsPrepared + 1);
 
             obj.currentProtocol.prepareEpoch(e);
             

@@ -20,6 +20,7 @@ classdef FigureHandlerManager < handle
 
     properties (Access = private, Transient)
         figureHandlers
+        slowCounts             % containers.Map handler class -> number of slow updates this run
     end
 
     methods
@@ -52,16 +53,43 @@ classdef FigureHandlerManager < handle
         end
 
         function updateFigures(obj, epochOrInterval)
+            % Each handler is timed. A handler whose update takes longer than
+            % SLOW_SECONDS twice (or VERY_SLOW_SECONDS once) is closed and
+            % replaced by a raw trace: plotting must never stall acquisition.
+            % On 2026-10-20 a MultiPulse run froze inside the per-epoch
+            % callbacks after 30 epochs; activity.log now records each step.
+            if isempty(obj.slowCounts)
+                obj.slowCounts = containers.Map();
+            end
             handlers = obj.figureHandlers;   % snapshot: a failure edits the list
             for i = 1:numel(handlers)
                 handler = handlers{i};
                 if ~isvalid(handler)
                     continue;
                 end
+                className = class(handler);
+                symphonyui.core.ActivityLog.mark('figure %s start', className);
+                t0 = tic;
                 try
                     handler.handleEpochOrInterval(epochOrInterval);
                 catch ex
+                    symphonyui.core.ActivityLog.mark('figure %s FAILED: %s', className, ex.message);
                     obj.onHandlerFailed(handler, ex);
+                    continue;
+                end
+                dt = toc(t0);
+                symphonyui.core.ActivityLog.mark('figure %s done %.2f s', className, dt);
+                if dt > symphonyui.core.FigureHandlerManager.SLOW_SECONDS
+                    n = 1;
+                    if obj.slowCounts.isKey(className), n = obj.slowCounts(className) + 1; end
+                    obj.slowCounts(className) = n;
+                    if dt > symphonyui.core.FigureHandlerManager.VERY_SLOW_SECONDS || n >= 2
+                        ex = MException('symphonyui:core:slowFigureHandler', ...
+                            'its update took %.1f s (acquisition was waiting for it)', dt);
+                        obj.onHandlerFailed(handler, ex);
+                    else
+                        fprintf(2, 'Figure handler %s took %.1f s to update; it will be closed if this happens again.\n', className, dt);
+                    end
                 end
             end
         end
@@ -220,6 +248,11 @@ classdef FigureHandlerManager < handle
             obj.figureHandlers(index) = [];
         end
 
+    end
+
+    properties (Constant)
+        SLOW_SECONDS = 3          % per-epoch update time that counts as slow
+        VERY_SLOW_SECONDS = 10    % one update this long closes the handler at once
     end
 
     methods (Static)
