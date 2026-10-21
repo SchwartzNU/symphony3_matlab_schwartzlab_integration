@@ -3203,35 +3203,7 @@ classdef SymphonyDataManager < handle
 
         function pEG = findPersistentEpochGroup(obj, cper, groupId)
             %FINDPERSISTENTEPOCHGROUP  Find an epoch group in the persistor by ID.
-            pEG = [];
-            gidClean = lower(strrep(groupId, '-', ''));
-            try
-                % Try current epoch group first
-                eg = cper.CurrentEpochGroup;
-                if ~isempty(eg)
-                    egUuid = lower(strrep(char(eg.UUID.ToString()), '-', ''));
-                    if strcmp(egUuid, gidClean)
-                        pEG = eg;
-                        return;
-                    end
-                end
-            catch curEx
-                fprintf(2, '    CurrentEpochGroup error: %s\n', curEx.message);
-            end
-            % Walk experiment epoch groups
-            try
-                egList = cper.Experiment.EpochGroupsList();
-                nEg = egList.Count;
-                for i = 0:nEg-1
-                    eg = egList.Item(i);
-                    egUuid = lower(strrep(char(eg.UUID.ToString()), '-', ''));
-                    if strcmp(egUuid, gidClean)
-                        pEG = eg;
-                        return;
-                    end
-                end
-            catch
-            end
+            pEG = symphonyui.ui.SymphonyDataManager.findEpochGroupInFile(cper, groupId);
         end
 
         function commitEpochGroupLabelFromPropGrid(obj, groupId, newLabel)
@@ -3933,6 +3905,51 @@ classdef SymphonyDataManager < handle
     end
 
     methods (Static)
+        function pEG = findEpochGroupInFile(cper, groupId)
+            % The persistor's epoch group with this id (uuid, dashes optional):
+            % the current group first, then every group including nested ones
+            % (a group begun while another was open sits inside it; the old
+            % top-level-only walk reported those as "not found", 2026-10-20).
+            % Each group is checked on its own so one bad group cannot hide
+            % the others.
+            pEG = [];
+            gidClean = lower(strrep(char(string(groupId)), '-', ''));
+            try
+                eg = cper.CurrentEpochGroup;
+                if ~isempty(eg) && strcmp(lower(strrep(char(eg.UUID.ToString()), '-', '')), gidClean)
+                    pEG = eg;
+                    return;
+                end
+            catch
+            end
+            queue = {};
+            try
+                egList = cper.Experiment.EpochGroupsList();
+                for i = 0:egList.Count-1
+                    try, queue{end+1} = egList.Item(i); catch, end %#ok<AGROW>
+                end
+            catch ex
+                fprintf(2, 'Data Manager: epoch group list error: %s\n', ex.message);
+            end
+            while ~isempty(queue)
+                eg = queue{1};
+                queue(1) = [];
+                try
+                    if strcmp(lower(strrep(char(eg.UUID.ToString()), '-', '')), gidClean)
+                        pEG = eg;
+                        return;
+                    end
+                    kids = symphonyui.core.callNetStatic('Symphony.Core.EnumerableExtensions', 'Wrap', eg.EpochGroups);
+                    e = kids.GetEnumerator();
+                    while e.MoveNext()
+                        queue{end+1} = e.Current; %#ok<AGROW>
+                    end
+                catch ex
+                    fprintf(2, 'Data Manager: epoch group skipped: %s\n', ex.message);
+                end
+            end
+        end
+
         function k = treeNodeKey(nd)
             % Stable key of a tree node across rebuilds: its entity id, or its
             % kind for the folders.
