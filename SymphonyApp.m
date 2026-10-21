@@ -209,6 +209,11 @@ classdef SymphonyApp < matlab.apps.AppBase
             items = cell(1, n + 1);
             items{1} = '(None)';
 
+            % alphabetical by the name shown, ignoring case
+            if n > 0
+                [~, order] = sort(lower({protocols.displayName}));
+                protocols = protocols(order);
+            end
             for i = 1:n
                 displayName = protocols(i).displayName;
                 protocolId = protocols(i).id;
@@ -549,8 +554,15 @@ classdef SymphonyApp < matlab.apps.AppBase
                     return;
                 end
                 sp = app.getSearchPaths();
+                preferred = '';
+                try
+                    if ~isempty(app.symphonyDataManager)
+                        preferred = app.symphonyDataManager.selectedSourceId();
+                    end
+                catch
+                end
                 result = symphonyui.ui.BeginEpochGroupDialog.showBlocking( ...
-                    app.UIFigure, app.host, sp);
+                    app.UIFigure, app.host, sp, preferred);
                 if isempty(result)
                     return;
                 end

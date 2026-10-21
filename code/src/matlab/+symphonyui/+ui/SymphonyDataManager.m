@@ -79,6 +79,19 @@ classdef SymphonyDataManager < handle
     end
 
     methods
+        function id = selectedSourceId(obj)
+            % Id of the source highlighted in the tree, or '' (used to default
+            % the source of a new epoch group).
+            id = '';
+            try
+                nd = obj.getSelectedTreeNodeData();
+                if ~isempty(nd) && isstruct(nd) && isfield(nd, 'kind') && strcmp(char(string(nd.kind)), 'source')
+                    id = char(string(nd.id));
+                end
+            catch
+            end
+        end
+
         function obj = SymphonyDataManager(host, parentFigure, onAfterHostMutation, onConfigureDevices)
             if nargin < 3
                 onAfterHostMutation = [];
@@ -3852,7 +3865,7 @@ classdef SymphonyDataManager < handle
                 end
                 % Build search paths the same way as SymphonyApp.getSearchPaths
                 sp = symphonyui.ui.SymphonyDataManager.buildSearchPaths();
-                result = symphonyui.ui.BeginEpochGroupDialog.showBlocking(obj.fig, obj.host, sp);
+                result = symphonyui.ui.BeginEpochGroupDialog.showBlocking(obj.fig, obj.host, sp, obj.selectedSourceId());
                 if isempty(result)
                     return;
                 end

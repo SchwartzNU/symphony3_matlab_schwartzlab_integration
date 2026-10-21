@@ -19,17 +19,82 @@ classdef BeginEpochGroupDialog < handle
 
         descIds  % cell array of epoch-group class names (parallel to descDropdown.Items)
         sourceIds  % cell array of source ID strings
+        preferredSourceId = ''  % source highlighted in the Data Manager ('' if none)
         typedLabel = ''  % Captures label text as user types (before Enter commits)
         searchPaths  % cell array of directories to scan
     end
 
     methods (Static)
-        function result = showBlocking(parentFigure, host, searchPaths)
+        function def = defaultSourceId(host, ids, parentIds, preferredId)
+            % Default source for a new epoch group (ids as the host reports them):
+            %   1. the source highlighted in the Data Manager, if it is a cell
+            %   2. otherwise the most recently created cell
+            %   3. otherwise the last leaf source
+            % "Cell" = a source whose description class name ends in 'Cell'
+            % (sa_labs.sources.retina.Cell, ...). Creation times come from the file.
+            def = '';
+            norm = @(x) lower(strrep(char(string(x)), '-', ''));
+            info = containers.Map();   % normalized id -> [isCell, creationTicks]
+            try
+                cper = host.GetPersistor();
+                factory = symphonyui.core.persistent.EntityFactory();
+                srcs = symphonyui.ui.AddSourceDialog.collectAllSources(cper.Experiment);
+                for i = 1:numel(srcs)
+                    s = srcs{i};
+                    isCell = false;
+                    try
+                        dt = char(symphonyui.core.persistent.Source(s, factory).getDescriptionType());
+                        parts = strsplit(dt, '.');
+                        isCell = ~isempty(regexp(parts{end}, 'Cell$', 'once'));
+                    catch
+                    end
+                    ticks = 0;
+                    try, ticks = double(s.CreationTime.UtcTicks); catch, end
+                    info(norm(s.UUID.ToString())) = [isCell, ticks];
+                end
+            catch
+            end
+            isCellId = @(id) info.isKey(norm(id)) && info(norm(id)) * [1; 0] == 1;
+            % 1. highlighted cell
+            if ~isempty(preferredId)
+                k = find(strcmp(cellfun(norm, ids, 'UniformOutput', false), norm(preferredId)), 1);
+                if ~isempty(k) && isCellId(ids{k})
+                    def = ids{k};
+                    return;
+                end
+            end
+            % 2. most recently created cell
+            best = -inf;
+            for i = 1:numel(ids)
+                if isCellId(ids{i})
+                    v = info(norm(ids{i}));
+                    if v(2) >= best
+                        best = v(2);
+                        def = ids{i};
+                    end
+                end
+            end
+            if ~isempty(def), return; end
+            % 3. last leaf source
+            for i = 1:numel(ids)
+                if ~any(strcmp(parentIds, ids{i}))
+                    def = ids{i};
+                end
+            end
+        end
+
+        function result = showBlocking(parentFigure, host, searchPaths, preferredSourceId)
             %SHOWBLOCKING  Open modal Begin Epoch Group dialog and block until done.
+            %   preferredSourceId: the source highlighted in the Data Manager, if
+            %   any. The source defaults to it when it is a cell, otherwise to the
+            %   most recently created cell.
             if nargin < 3
                 searchPaths = {};
             end
-            dlg = symphonyui.ui.BeginEpochGroupDialog(parentFigure, host, searchPaths);
+            if nargin < 4
+                preferredSourceId = '';
+            end
+            dlg = symphonyui.ui.BeginEpochGroupDialog(parentFigure, host, searchPaths, preferredSourceId);
             dlg.fig.Visible = 'on';
             uiwait(dlg.fig);
             result = dlg.result;
@@ -37,10 +102,11 @@ classdef BeginEpochGroupDialog < handle
     end
 
     methods (Access = private)
-        function obj = BeginEpochGroupDialog(parentFigure, host, searchPaths)
+        function obj = BeginEpochGroupDialog(parentFigure, host, searchPaths, preferredSourceId)
             obj.parentFigure = parentFigure;
             obj.host = host;
             obj.searchPaths = searchPaths;
+            obj.preferredSourceId = char(string(preferredSourceId));
             obj.result = [];
             obj.descIds = {};
             obj.sourceIds = {};
@@ -196,26 +262,32 @@ classdef BeginEpochGroupDialog < handle
                             parentIds{i} = char(pid);
                         end
                     end
-                    obj.sourceDropdown.Items = labels;
+                    % Show the ancestry ('Retina > 3') so equal labels stay
+                    % distinguishable; select by id, not by label.
+                    shown = labels;
+                    for i = 1:n
+                        chain = labels(i);
+                        p = parentIds{i};
+                        guard = 0;
+                        while ~isempty(p) && guard < 10
+                            k = find(strcmp(ids, p), 1);
+                            if isempty(k), break; end
+                            chain = [labels(k), chain]; %#ok<AGROW>
+                            p = parentIds{k};
+                            guard = guard + 1;
+                        end
+                        shown{i} = strjoin(chain, ' > ');
+                    end
+                    obj.sourceDropdown.Items = shown;
+                    obj.sourceDropdown.ItemsData = ids;
                     obj.sourceIds = ids;
 
-                    % Default to the deepest (leaf) source — one whose Id
-                    % is not the ParentSourceId of any other source.
-                    leafIdx = [];
-                    for i = 1:n
-                        isParent = false;
-                        for j = 1:n
-                            if strcmp(ids{i}, parentIds{j})
-                                isParent = true;
-                                break;
-                            end
-                        end
-                        if ~isParent
-                            leafIdx = i;
-                        end
-                    end
-                    if ~isempty(leafIdx)
-                        obj.sourceDropdown.Value = labels{leafIdx};
+                    % Default: the highlighted cell, else the most recently
+                    % created cell, else the last leaf source (old behaviour).
+                    def = symphonyui.ui.BeginEpochGroupDialog.defaultSourceId( ...
+                        obj.host, ids, parentIds, obj.preferredSourceId);
+                    if ~isempty(def)
+                        obj.sourceDropdown.Value = def;
                     end
                 end
             catch ex
@@ -243,9 +315,9 @@ classdef BeginEpochGroupDialog < handle
             % Resolve selected source ID
             sourceId = '';
             if ~isempty(obj.sourceIds)
-                idx = find(strcmp(obj.sourceDropdown.Items, obj.sourceDropdown.Value), 1);
-                if ~isempty(idx) && idx >= 1 && idx <= numel(obj.sourceIds)
-                    sourceId = obj.sourceIds{idx};
+                v = obj.sourceDropdown.Value;   % ItemsData holds the ids
+                if ischar(v) && any(strcmp(obj.sourceIds, v))
+                    sourceId = v;
                 end
             end
 
