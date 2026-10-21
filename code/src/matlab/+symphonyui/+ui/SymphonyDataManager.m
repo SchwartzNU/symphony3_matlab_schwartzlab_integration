@@ -1880,12 +1880,12 @@ classdef SymphonyDataManager < handle
         function keys = allNodeKeys(obj)
             keys = containers.Map();
             try
-                stack = num2cell(obj.tree.Children);
+                stack = reshape(num2cell(obj.tree.Children), 1, []);
                 while ~isempty(stack)
                     nd = stack{end}; stack(end) = [];
                     k = symphonyui.ui.SymphonyDataManager.treeNodeKey(nd.NodeData);
                     if ~isempty(k), keys(k) = true; end
-                    stack = [stack, num2cell(nd.Children)]; %#ok<AGROW>
+                    stack = [stack, reshape(num2cell(nd.Children), 1, [])]; %#ok<AGROW>
                 end
             catch
             end
@@ -1899,7 +1899,7 @@ classdef SymphonyDataManager < handle
             obj.ensureExpandedKeys();
             firstBuild = isempty(prevKeys) || prevKeys.Count == 0;
             try
-                stack = num2cell(obj.tree.Children);
+                stack = reshape(num2cell(obj.tree.Children), 1, []);
                 while ~isempty(stack)
                     node = stack{end}; stack(end) = [];
                     nd = node.NodeData;
@@ -1919,7 +1919,7 @@ classdef SymphonyDataManager < handle
                             p = p.Parent;
                         end
                     end
-                    stack = [stack, num2cell(node.Children)]; %#ok<AGROW>
+                    stack = [stack, reshape(num2cell(node.Children), 1, [])]; %#ok<AGROW>
                 end
             catch ex
                 fprintf(2, 'Data Manager: could not restore the tree layout: %s\n', ex.message);
@@ -2133,7 +2133,7 @@ classdef SymphonyDataManager < handle
             % Blocks added while a run was recording: now that the host can be
             % read again, find out whether they have epochs.
             try
-                stack = num2cell(obj.tree.Children);
+                stack = reshape(num2cell(obj.tree.Children), 1, []);
                 while ~isempty(stack)
                     n = stack{end};
                     stack(end) = [];
@@ -2148,7 +2148,7 @@ classdef SymphonyDataManager < handle
                             n.NodeData = nd;
                         end
                     end
-                    stack = [stack, num2cell(n.Children)]; %#ok<AGROW>
+                    stack = [stack, reshape(num2cell(n.Children), 1, [])]; %#ok<AGROW>
                 end
             catch
             end
