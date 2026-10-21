@@ -72,6 +72,8 @@ classdef SymphonyDataManager < handle
         % epoch plotting) to prevent concurrent access with C# writes.
         acquisitionMode logical = false
         refreshPending logical = false       % a refresh was requested during a run
+        raiseAfterRefresh logical = false    % bring the window forward after the next refresh (own dialogs only)
+        expandedKeys                         % containers.Map of tree nodes the user has open (id, or kind for folders)
         refreshPendingFull logical = false
         sourceLabelCache    % containers.Map source id -> tree label (Retina: label + DJID + eye)
     end
@@ -303,11 +305,15 @@ classdef SymphonyDataManager < handle
             % Update menu enable/disable state
             obj.updateMenuState();
 
-            % Restore focus to the Data Manager figure after operations
-            % that may have shifted focus (e.g. listdlg, split, merge).
-            try
-                figure(obj.fig);
-            catch
+            % Bring the Data Manager back to the front only after its own dialogs
+            % (split, merge, delete, change source). Raising it on every refresh
+            % pulled it in front of the main window after each run (2026-10-20).
+            if obj.raiseAfterRefresh
+                obj.raiseAfterRefresh = false;
+                try
+                    figure(obj.fig);
+                catch
+                end
             end
         end
 
@@ -615,6 +621,7 @@ classdef SymphonyDataManager < handle
             obj.tree.Layout.Column = 1;
             obj.tree.SelectionChangedFcn = @(s, e) obj.onTreeSelectionChanged(s, e);
             obj.tree.NodeExpandedFcn = @(s, e) obj.onNodeExpanded(e.Node);
+            obj.tree.NodeCollapsedFcn = @(s, e) obj.onNodeCollapsed(e.Node);
             obj.buildTreeContextMenus();
 
             % Vertical splitter in the right panel: detail cards (top) | tabs (bottom)
@@ -919,6 +926,7 @@ classdef SymphonyDataManager < handle
             cm.ContextMenuOpeningFcn = @(~,~) obj.selectTreeNode(node);
             uimenu(cm, 'Text', 'Split Epoch Group...', 'MenuSelectedFcn', @(~,~)obj.onTreeMenuSplitEpochGroup());
             uimenu(cm, 'Text', 'Merge Epoch Groups...', 'MenuSelectedFcn', @(~,~)obj.onTreeMenuMergeEpochGroups());
+            uimenu(cm, 'Text', 'Change Source...', 'MenuSelectedFcn', @(~,~)obj.onTreeMenuChangeEpochGroupSource());
             uimenu(cm, 'Text', 'Delete', 'Separator', 'on', 'MenuSelectedFcn', @(~,~)obj.onTreeMenuDeleteEntity());
         end
 
@@ -992,6 +1000,7 @@ classdef SymphonyDataManager < handle
 
         function onTreeMenuDeleteEntity(obj)
             if obj.refuseWhileRecording(), return; end
+            obj.raiseAfterRefresh = true;
             nd = obj.getSelectedTreeNodeData();
             if isempty(nd)
                 return;
@@ -1016,6 +1025,7 @@ classdef SymphonyDataManager < handle
 
         function onTreeMenuSplitEpochGroup(obj)
             if obj.refuseWhileRecording(), return; end
+            obj.raiseAfterRefresh = true;
             try
                 nd = obj.getSelectedTreeNodeData();
                 if isempty(nd) || ~strcmp(char(string(nd.kind)), 'epoch_group')
@@ -1052,6 +1062,7 @@ classdef SymphonyDataManager < handle
 
         function onTreeMenuSplitAfterThisBlock(obj)
             if obj.refuseWhileRecording(), return; end
+            obj.raiseAfterRefresh = true;
             nd = obj.getSelectedTreeNodeData();
             if isempty(nd) || ~strcmp(char(string(nd.kind)), 'epoch_block')
                 return;
@@ -1077,6 +1088,7 @@ classdef SymphonyDataManager < handle
 
         function onTreeMenuMergeEpochGroups(obj)
             if obj.refuseWhileRecording(), return; end
+            obj.raiseAfterRefresh = true;
             nd = obj.getSelectedTreeNodeData();
             if isempty(nd) || ~strcmp(char(string(nd.kind)), 'epoch_group')
                 return;
@@ -1355,6 +1367,7 @@ classdef SymphonyDataManager < handle
         end
 
         function populateTree(obj, dm)
+            prevKeys = obj.allNodeKeys();   % to reveal what is new after the rebuild
             delete(obj.tree.Children);
             ic = @obj.iconIfAny;
 
@@ -1389,8 +1402,7 @@ classdef SymphonyDataManager < handle
             end
 
             expand(root);
-            expand(sf);
-            expand(gf);
+            obj.restoreTreeExpansion(prevKeys);
         end
 
         function id = experimentId(obj, dm)
@@ -1812,10 +1824,134 @@ classdef SymphonyDataManager < handle
             end
         end
 
+        function onNodeCollapsed(obj, node)
+            obj.rememberExpanded(node, false);
+        end
+
+        function rememberExpanded(obj, node, isOpen)
+            try
+                obj.ensureExpandedKeys();
+                k = symphonyui.ui.SymphonyDataManager.treeNodeKey(node.NodeData);
+                if isempty(k), return; end
+                if isOpen
+                    obj.expandedKeys(k) = true;
+                elseif obj.expandedKeys.isKey(k)
+                    remove(obj.expandedKeys, k);
+                end
+            catch
+            end
+        end
+
+        function ensureExpandedKeys(obj)
+            if isempty(obj.expandedKeys)
+                % first build: the Sources and Epoch Groups folders start open
+                obj.expandedKeys = containers.Map();
+                obj.expandedKeys('sources_folder') = true;
+                obj.expandedKeys('epoch_groups_folder') = true;
+            end
+        end
+
+        function keys = allNodeKeys(obj)
+            keys = containers.Map();
+            try
+                stack = num2cell(obj.tree.Children);
+                while ~isempty(stack)
+                    nd = stack{end}; stack(end) = [];
+                    k = symphonyui.ui.SymphonyDataManager.treeNodeKey(nd.NodeData);
+                    if ~isempty(k), keys(k) = true; end
+                    stack = [stack, num2cell(nd.Children)]; %#ok<AGROW>
+                end
+            catch
+            end
+        end
+
+        function restoreTreeExpansion(obj, prevKeys)
+            % After a full rebuild: reopen the nodes the user had open, and open
+            % the parents of anything new (a source or epoch group just added)
+            % so it is visible. Epoch blocks are not reopened (their epochs load
+            % on demand). expand() does not fire NodeExpandedFcn.
+            obj.ensureExpandedKeys();
+            firstBuild = isempty(prevKeys) || prevKeys.Count == 0;
+            try
+                stack = num2cell(obj.tree.Children);
+                while ~isempty(stack)
+                    node = stack{end}; stack(end) = [];
+                    nd = node.NodeData;
+                    k = symphonyui.ui.SymphonyDataManager.treeNodeKey(nd);
+                    kind = '';
+                    try, kind = char(string(nd.kind)); catch, end
+                    if ~isempty(k) && obj.expandedKeys.isKey(k) && ~strcmp(kind, 'epoch_block')
+                        expand(node);
+                    end
+                    if ~firstBuild && ~isempty(k) && ~prevKeys.isKey(k) ...
+                            && any(strcmp(kind, {'source', 'epoch_group', 'epoch_block'}))
+                        p = node.Parent;
+                        while isa(p, 'matlab.ui.container.TreeNode')
+                            expand(p);
+                            pk = symphonyui.ui.SymphonyDataManager.treeNodeKey(p.NodeData);
+                            if ~isempty(pk), obj.expandedKeys(pk) = true; end
+                            p = p.Parent;
+                        end
+                    end
+                    stack = [stack, num2cell(node.Children)]; %#ok<AGROW>
+                end
+            catch ex
+                fprintf(2, 'Data Manager: could not restore the tree layout: %s\n', ex.message);
+            end
+        end
+
+        function onTreeMenuChangeEpochGroupSource(obj)
+            % Re-assign the selected epoch group to another source (Symphony 2's
+            % Data Manager had this): the epoch group's Source in the file.
+            if obj.refuseWhileRecording(), return; end
+            nd = obj.getSelectedTreeNodeData();
+            if isempty(nd) || ~strcmp(char(string(nd.kind)), 'epoch_group')
+                return;
+            end
+            gid = char(string(nd.id));
+            try
+                cper = obj.host.GetPersistor();
+                if isempty(cper), return; end
+                pEG = obj.findPersistentEpochGroup(cper, gid);
+                if isempty(pEG)
+                    error('This epoch group was not found in the file.');
+                end
+                [ids, labels] = symphonyui.ui.SymphonyDataManager.sourceChoices(cper);
+                if isempty(ids)
+                    uialert(obj.fig, 'The file has no sources.', 'Change Source');
+                    return;
+                end
+                currentId = '';
+                try
+                    currentId = lower(strrep(char(pEG.Source.UUID.ToString()), '-', ''));
+                catch
+                end
+                initial = find(strcmp(ids, currentId), 1);
+                if isempty(initial), initial = 1; end
+                obj.raiseAfterRefresh = true;
+                [sel, ok] = listdlg('PromptString', {'New source for this epoch group:'}, ...
+                    'ListString', labels, 'SelectionMode', 'single', 'InitialValue', initial, ...
+                    'Name', 'Change Source', 'ListSize', [440 260]);
+                if ~ok || isempty(sel) || strcmp(ids{sel}, currentId)
+                    try, figure(obj.fig); catch, end
+                    obj.raiseAfterRefresh = false;
+                    return;
+                end
+                symphonyui.ui.SymphonyDataManager.setEpochGroupSource(cper, pEG, ids{sel});
+                symphonyui.ui.FileCheckpoint.flush(obj.host, 'epochGroupSource');
+                obj.sourceLabelCache = containers.Map();
+                obj.notifyAcquireRefresh();
+                obj.refresh(true);
+            catch ex
+                obj.showError(ex.message, 'Change Source');
+            end
+        end
+
         function onNodeExpanded(obj, node)
             % Expand arrow clicked on an epoch block that still has only its
             % placeholder child: load the epochs. Same guard as
             % onTreeSelectionChanged: no host-side reads while recording.
+            obj.rememberExpanded(node, true);
             try
                 if isempty(node) || ~isvalid(node), return; end
                 nd = node.NodeData;
@@ -3784,6 +3920,62 @@ classdef SymphonyDataManager < handle
     end
 
     methods (Static)
+        function k = treeNodeKey(nd)
+            % Stable key of a tree node across rebuilds: its entity id, or its
+            % kind for the folders.
+            k = '';
+            try
+                if isfield(nd, 'id') && ~isempty(nd.id)
+                    k = char(string(nd.id));
+                elseif isfield(nd, 'kind')
+                    k = char(string(nd.kind));
+                end
+            catch
+            end
+        end
+
+        function [ids, labels] = sourceChoices(cper)
+            % Every source in the file: ids (lowercase uuid without dashes) and
+            % labels with their ancestry and cell type, e.g. 'Retina > 3 (ON alpha)'.
+            ids = {};
+            labels = {};
+            srcs = symphonyui.ui.AddSourceDialog.collectAllSources(cper.Experiment);
+            for i = 1:numel(srcs)
+                s = srcs{i};
+                try
+                    ids{end+1} = lower(strrep(char(s.UUID.ToString()), '-', '')); %#ok<AGROW>
+                    chain = {char(s.Label)};
+                    p = [];
+                    try, p = s.Parent; catch, end
+                    while ~isempty(p)
+                        chain = [{char(p.Label)}, chain]; %#ok<AGROW>
+                        try, p = p.Parent; catch, p = []; end
+                    end
+                    lab = strjoin(chain, ' > ');
+                    m = symphonyui.ui.SymphonyDataManager.readPropertyValues(s.Properties);
+                    if m.isKey('type') && ~isempty(m('type')) && ischar(m('type'))
+                        lab = sprintf('%s (%s)', lab, m('type'));
+                    end
+                    labels{end+1} = lab; %#ok<AGROW>
+                catch
+                    if numel(ids) > numel(labels), ids(end) = []; end
+                end
+            end
+        end
+
+        function setEpochGroupSource(cper, pEG, sourceId)
+            % Point the epoch group at another source (core setter; it moves the
+            % group's 'source' link and the sources' epochGroups membership).
+            srcs = symphonyui.ui.AddSourceDialog.collectAllSources(cper.Experiment);
+            for i = 1:numel(srcs)
+                if strcmp(lower(strrep(char(srcs{i}.UUID.ToString()), '-', '')), sourceId)
+                    pEG.Source = srcs{i};
+                    return;
+                end
+            end
+            error('Source %s was not found in the file.', sourceId);
+        end
+
         function [pt, readOnly, fileDescOk] = sourcePropertyType(pSrc, propName)
             % Declared primitive type ('uint8', 'denserealdouble', 'char', ...)
             % and read-only flag of a source property, taken from the source's
