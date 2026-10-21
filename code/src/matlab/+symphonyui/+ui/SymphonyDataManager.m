@@ -1926,6 +1926,50 @@ classdef SymphonyDataManager < handle
             end
         end
 
+        function changeSourceOfNestedGroup(obj, gid, sourceId, sourceLabel)
+            % Move a nested epoch group to the top level and to another source:
+            % close the file, relink (symphonyui.ui.EpochGroupRelink), reopen.
+            fp = symphonyui.ui.FileCheckpoint.getPath();
+            if isempty(fp) || ~isfile(fp)
+                error('The data file path is not known. Close and reopen the file, then try again.');
+            end
+            hasOpen = false;
+            try
+                es = obj.awaitTaskWithResult(obj.host.GetExperimentStateAsync());
+                hasOpen = logical(es.HasEpochGroup);
+            catch
+            end
+            if hasOpen
+                uialert(obj.fig, ['End the current epoch group first (Ctrl+E). This group is inside another ' ...
+                    'epoch group, so changing its source also moves it out to the top level, which needs ' ...
+                    'the file briefly closed (and closing would end the open group).'], 'Change Source');
+                return;
+            end
+            choice = uiconfirm(obj.fig, sprintf(['This epoch group is inside another epoch group. Its source ' ...
+                'will be changed to %s and it will be moved out to the top level.\n\nThe file is closed ' ...
+                'and reopened to do this; nothing is copied or rewritten.'], sourceLabel), 'Change Source', ...
+                'Options', {'Move and change source', 'Cancel'}, 'DefaultOption', 1, 'CancelOption', 2);
+            if ~strcmp(choice, 'Move and change source')
+                return;
+            end
+            obj.awaitTask(obj.host.CloseFileAsync());
+            relinkErr = [];
+            try
+                rep = symphonyui.ui.EpochGroupRelink.apply(fp, gid, sourceId);
+                fprintf('Change Source: %s\n', strjoin(rep.steps, '; '));
+            catch ex
+                relinkErr = ex;
+            end
+            obj.awaitTask(obj.host.OpenFileAsync(fp));
+            symphonyui.ui.FileCheckpoint.setPath(fp);
+            obj.sourceLabelCache = containers.Map();
+            obj.notifyAcquireRefresh();
+            obj.refresh(true);
+            if ~isempty(relinkErr)
+                rethrow(relinkErr);
+            end
+        end
+
         function onTreeMenuChangeEpochGroupSource(obj)
             % Re-assign the selected epoch group to another source (Symphony 2's
             % Data Manager had this): the epoch group's Source in the file.
@@ -1961,6 +2005,21 @@ classdef SymphonyDataManager < handle
                 if ~ok || isempty(sel) || strcmp(ids{sel}, currentId)
                     try, figure(obj.fig); catch, end
                     obj.raiseAfterRefresh = false;
+                    return;
+                end
+                % A group inside another group must also move out to the top
+                % level (the importer cannot handle a nested group on another
+                % source, 2026-10-20); the core cannot do that with the file open.
+                nested = false;
+                try
+                    sn = obj.tree.SelectedNodes;
+                    pn = sn(1).Parent;
+                    nested = isa(pn, 'matlab.ui.container.TreeNode') && isstruct(pn.NodeData) ...
+                        && isfield(pn.NodeData, 'kind') && strcmp(char(string(pn.NodeData.kind)), 'epoch_group');
+                catch
+                end
+                if nested
+                    obj.changeSourceOfNestedGroup(gid, ids{sel}, labels{sel});
                     return;
                 end
                 symphonyui.ui.SymphonyDataManager.setEpochGroupSource(cper, pEG, ids{sel});
