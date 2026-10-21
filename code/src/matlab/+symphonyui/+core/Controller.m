@@ -405,7 +405,7 @@ classdef Controller < symphonyui.core.CoreObject
             listeners(end + 1) = NetListener(obj.cobj, 'CompletedEpoch', 'Symphony.Core.TimeStampedEpochEventArgs', @(h,d)onCompletedEpoch(obj,h,d));
             function onCompletedEpoch(obj, ~, event)
                 epoch = symphonyui.core.Epoch(event.Epoch);
-                symphonyui.core.ActivityLog.mark('completed epoch callback start (completed so far %d)', obj.currentProtocol.numEpochsCompleted);
+                symphonyui.core.ActivityLog.mark('completed epoch callback start');
                 try
                     if epoch.isInterval()
                         obj.currentProtocol.completeInterval(epoch);
@@ -804,7 +804,7 @@ classdef Controller < symphonyui.core.CoreObject
 
         function e = nextEpoch(obj)
             e = symphonyui.core.Epoch(class(obj.currentProtocol));
-            symphonyui.core.ActivityLog.mark('prepareEpoch %d start', obj.currentProtocol.numEpochsPrepared + 1);
+            symphonyui.core.ActivityLog.mark('prepareEpoch start');
 
             obj.currentProtocol.prepareEpoch(e);
             
