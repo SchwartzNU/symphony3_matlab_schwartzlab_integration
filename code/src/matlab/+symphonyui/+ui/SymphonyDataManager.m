@@ -910,6 +910,10 @@ classdef SymphonyDataManager < handle
                 vh = max(1, pp(4));
                 minH = 520;
                 cardH = max(vh, minH);
+                % The waveform card (a dropdown and the plot) always fits the
+                % visible area: with the 520 px minimum the plot overflowed the
+                % preview box and its top was cut off (2026-10-20).
+                epochH = max(vh, 160);
                 cards = {obj.cardEmpty, obj.cardExperiment, obj.cardSource, ...
                     obj.cardEpochGroup, obj.cardEpochBlock, obj.cardEpoch};
                 for k = 1:numel(cards)
@@ -918,7 +922,16 @@ classdef SymphonyDataManager < handle
                         continue;
                     end
                     p.Units = 'pixels';
-                    p.Position = [0 0 vw cardH];
+                    if isequal(p, obj.cardEpoch)
+                        p.Position = [0 0 vw epochH];
+                    else
+                        p.Position = [0 0 vw cardH];
+                    end
+                end
+                % scroll back to the top so a tall card starts at its title
+                try
+                    scroll(obj.cardStack, 'top');
+                catch
                 end
             catch
             end
