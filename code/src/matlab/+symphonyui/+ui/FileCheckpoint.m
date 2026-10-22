@@ -192,6 +192,27 @@ classdef FileCheckpoint
             end
         end
 
+        function lockObj = coreHdf5Lock(cper)
+            % The persistor's static HDF5 lock object (H5EpochPersistor.Hdf5Lock,
+            % the one AcquireLock/ReleaseLock use), so it can be tried without
+            % waiting (Monitor.TryEnter).
+            persistent cached
+            if isempty(cached)
+                flags = System.Enum.ToObject(System.Type.GetType('System.Reflection.BindingFlags'), int32(16 + 32 + 8)); % Public | NonPublic | Static
+                f = [];
+                t = cper.GetType();
+                while isempty(f) && ~isempty(t)   % declared on H5EpochPersistor; walk up from the runtime type
+                    f = t.GetField('Hdf5Lock', flags);
+                    t = t.BaseType;
+                end
+                if isempty(f)
+                    error('FileCheckpoint:noLock', 'H5EpochPersistor.Hdf5Lock not found');
+                end
+                cached = f.GetValue([]);
+            end
+            lockObj = cached;
+        end
+
         function ok = flushPersistor(cper, reason)
             % FLUSHPERSISTOR  H5Fflush the persistor's file through the core's own
             % HDF5 instance (HDF.PInvoke loads hdf5_symphony.dll, the library the
@@ -232,13 +253,35 @@ classdef FileCheckpoint
                 args = NET.createArray('System.Object', 2);
                 args(1) = fid;
                 args(2) = scopeGlobal;
-                cper.AcquireLock();
-                try
-                    r = flushMethod.Invoke([], args);
-                    cper.ReleaseLock();
-                catch ex
-                    cper.ReleaseLock();
-                    rethrow(ex);
+                if strcmp(reason, 'periodic')
+                    % During a run: never wait for the lock. AcquireLock blocks the
+                    % MATLAB thread for as long as the core's writer holds it, and
+                    % the writer in turn waits for MATLAB to take its epoch events;
+                    % a run then froze with Stop unresponsive (2026-10-20/22). If
+                    % the lock is busy, skip this flush; the next one is 5 s later.
+                    lockObj = symphonyui.ui.FileCheckpoint.coreHdf5Lock(cper);
+                    symphonyui.core.ActivityLog.mark('flush periodic: try lock');
+                    if ~System.Threading.Monitor.TryEnter(lockObj, int32(0))
+                        symphonyui.core.ActivityLog.mark('flush periodic: lock busy, skipped');
+                        return;
+                    end
+                    try
+                        r = flushMethod.Invoke([], args);
+                        System.Threading.Monitor.Exit(lockObj);
+                    catch ex
+                        System.Threading.Monitor.Exit(lockObj);
+                        rethrow(ex);
+                    end
+                    symphonyui.core.ActivityLog.mark('flush periodic: done');
+                else
+                    cper.AcquireLock();
+                    try
+                        r = flushMethod.Invoke([], args);
+                        cper.ReleaseLock();
+                    catch ex
+                        cper.ReleaseLock();
+                        rethrow(ex);
+                    end
                 end
                 ok = int32(r) >= 0;
                 if ~ok
